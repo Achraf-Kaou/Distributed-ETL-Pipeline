@@ -18,6 +18,9 @@ lazy val root = (project in file("."))
 
       // xml Support
       "com.databricks"   %% "spark-xml"      % "0.18.0",
+      
+      // HTTP Client for API calls 
+      "com.lihaoyi"      %% "requests"       % "0.9.0",
 
       // Testing
       "org.scalameta" %% "munit" % "1.0.0" % Test

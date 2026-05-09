@@ -1,5 +1,6 @@
 import org.apache.spark.sql.SparkSession
 import extract.ExtractFlatFiles
+import extract.ExtractApi
 import java.io.File
 
 object Main {
@@ -48,6 +49,23 @@ object Main {
       }
 
       println(s"\n🎉 Processing completed! Success: $success | Failed: $failed")
+
+      val dfApi = ExtractApi.read(
+        spark = spark,
+        url = "https://jsonplaceholder.typicode.com/users",
+        rootField = ""
+      )
+
+      ExtractApi.printContent(dfApi, "API - Users")
+
+
+      val dfApi2 = ExtractApi.read(
+        spark = spark,
+        url = "https://jsonplaceholder.typicode.com/users",
+        rootField = "entries"
+      )
+
+      ExtractApi.printContent(dfApi2, "API - Users")
 
     } catch {
       case e: Exception =>
