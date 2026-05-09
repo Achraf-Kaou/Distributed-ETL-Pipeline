@@ -16,6 +16,9 @@ lazy val root = (project in file("."))
       // Excel Support
       "com.crealytics"   %% "spark-excel"    % "3.5.0_0.20.3",
 
+      // xml Support
+      "com.databricks"   %% "spark-xml"      % "0.18.0",
+
       // Testing
       "org.scalameta" %% "munit" % "1.0.0" % Test
     )
