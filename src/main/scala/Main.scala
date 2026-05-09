@@ -1,5 +1,6 @@
 import org.apache.spark.sql.SparkSession
 import extract.extractFlat.ExtractTxt
+import java.io.File
 
 object Main {
 
@@ -14,24 +15,59 @@ object Main {
 
     spark.sparkContext.setLogLevel("ERROR")
 
+    val rawFolderPath = "data/raw"
+
     try {
 
-      // Read the TXT file using Spark
-      val df = ExtractTxt.read(
-        spark = spark, 
-        filePath = "data/raw/example.txt", 
-        header = true, 
-        delimiter = ","
-      )
+      val rawDir = new File(rawFolderPath)
 
-      ExtractTxt.printContent(df)
-      ExtractTxt.printSummary(df)
+      if (!rawDir.exists() || !rawDir.isDirectory) {
+        println(s"❌ Folder '$rawFolderPath' not found!")
+        println("Please create the folder and put your files inside it.")
+        return
+      }
+
+      val files = rawDir.listFiles()
+        .filter(_.isFile)
+        .sortBy(_.getName)
+
+      if (files.isEmpty) {
+        println(s"⚠️ No files found in '$rawFolderPath' folder.")
+        return
+      }
+
+      println(s"✅ Found ${files.length} file(s) in '$rawFolderPath'\n")
+
+      files.foreach { file =>
+        processFile(spark, file)
+      }
+
+      println("🎉 All files processed successfully!")
 
     } catch {
       case e: Exception =>
         println(s"Error reading file: ${e.getMessage}")
     } finally {
       spark.stop()
+    }
+  }
+
+  def processFile(spark: SparkSession, file: File): Unit = {
+    try {
+      println(s"Processing file: ${file.getName}")
+
+      val df = ExtractTxt.read(
+        spark = spark, 
+        filePath = file.getAbsolutePath, 
+        header = true, 
+        delimiter = ","
+      )
+
+      ExtractTxt.printContent(df)
+      ExtractTxt.printSummary(df)
+    } catch {
+      case e: Exception =>
+        println(s"Error processing file '${file.getName}': ${e.getMessage}")
     }
   }
 
