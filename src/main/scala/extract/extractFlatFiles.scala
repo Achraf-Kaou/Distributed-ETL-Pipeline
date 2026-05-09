@@ -1,8 +1,9 @@
-package extract.extractFlat
+package extract
 
 import org.apache.spark.sql.{SparkSession, DataFrame}
+import org.apache.spark.sql.functions._
 
-object ExtractTxt {
+object ExtractFlatFiles {
 
   def read(
     spark: SparkSession,
@@ -15,20 +16,14 @@ object ExtractTxt {
     val ext = filePath.toLowerCase.split("\\.").last
 
     ext match {
-      case "txt" =>
-        readSimple(spark, filePath, header, delimiter)
-
-      case "csv" =>
-        readSimple(spark, filePath, header, delimiter)
-
-      case "tsv" =>
-        readSimple(spark, filePath, header, "\t")
-
-      case "xlsx" | "xls" =>
-        readExcel(spark, filePath, sheetName, header)
-
-      case _ =>
-        throw new IllegalArgumentException(s"Unsupported file format: .$ext")
+      case "txt"          => readSimple(spark, filePath, header, delimiter)
+      case "csv"          => readSimple(spark, filePath, header, delimiter)
+      case "tsv"          => readSimple(spark, filePath, header, "\t")
+      case "xlsx" | "xls" => readExcel(spark, filePath, sheetName, header)
+      case "json"         => readJson(spark, filePath)
+      case "parquet"      => readParquet(spark, filePath)
+      case "xml"          => readXml(spark, filePath)
+      case _              => throw new IllegalArgumentException(s"Unsupported file format: .$ext")
     }
   }
 
@@ -58,6 +53,35 @@ object ExtractTxt {
       .load(filePath)
   }
 
+  // ===== JSON READER =====
+  private def readJson(spark: SparkSession, path: String): DataFrame = {
+    val rawDF = spark.read
+      .option("multiLine", "true")
+      .option("mode", "PERMISSIVE")
+      .json(path)
+
+    if (rawDF.columns.contains("employees")) {
+      rawDF
+        .select(explode(col("employees")).as("employee"))
+        .select("employee.*")
+    } else {
+      rawDF
+    }
+  }
+
+  //  ==== PARQUET READER =====
+  private def readParquet(spark: SparkSession, path: String): DataFrame = {
+    spark.read.parquet(path)
+  }
+
+  //  ==== XML READER =====
+  private def readXml(spark: SparkSession, path: String): DataFrame = {
+    spark.read
+      .format("com.databricks.spark.xml")
+      .option("rowTag", "row")
+      .option("inferSchema", "true")
+      .load(path)
+  }
 
   def printContent(df: DataFrame): Unit = {
     println(s"\n=== Content of file ===")

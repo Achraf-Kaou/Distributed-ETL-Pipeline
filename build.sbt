@@ -29,6 +29,8 @@ lazy val root = (project in file("."))
   run / javaOptions ++= Seq(
     "--add-exports=java.base/sun.nio.ch=ALL-UNNAMED",
     "--add-opens=java.base/java.nio=ALL-UNNAMED", 
+    "--add-opens=java.base/java.io=ALL-UNNAMED",
+    "--add-opens=java.base/sun.nio.cs=ALL-UNNAMED",
     "-Xmx2G", 
     "-Dspark.ui.enabled=false"
   )

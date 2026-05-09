@@ -1,16 +1,14 @@
 import org.apache.spark.sql.SparkSession
-import extract.extractFlat.ExtractTxt
+import extract.ExtractFlatFiles
 import java.io.File
 
 object Main {
 
   def main(args: Array[String]): Unit = {
-      
-    // Create Spark Session
+    
     val spark = SparkSession.builder()
-      .appName("TXT Extractor with Spark")
-      .master("local[*]")           // Run locally
-      .config("spark.ui.enabled", "false")
+      .appName("Distributed ETL - Raw Data Processor")
+      .master("local[*]")
       .getOrCreate()
 
     spark.sparkContext.setLogLevel("ERROR")
@@ -18,57 +16,61 @@ object Main {
     val rawFolderPath = "data/raw"
 
     try {
-
       val rawDir = new File(rawFolderPath)
 
       if (!rawDir.exists() || !rawDir.isDirectory) {
         println(s"❌ Folder '$rawFolderPath' not found!")
-        println("Please create the folder and put your files inside it.")
+        println("Please create the folder and put your files/folders inside.")
         return
       }
 
-      val files = rawDir.listFiles()
-        .filter(_.isFile)
+      // Improved filtering: exclude hidden/temp files
+      val filesAndFolders = rawDir.listFiles()
+        .filter(f => f.isFile || (f.isDirectory && f.getName.endsWith(".parquet")))
+        .filter(f => !f.getName.startsWith(".") && !f.getName.startsWith("_"))
         .sortBy(_.getName)
 
-      if (files.isEmpty) {
-        println(s"⚠️ No files found in '$rawFolderPath' folder.")
+      if (filesAndFolders.isEmpty) {
+        println(s"⚠️ No files or Parquet folders found in '$rawFolderPath'.")
         return
       }
 
-      println(s"✅ Found ${files.length} file(s) in '$rawFolderPath'\n")
+      println(s"✅ Found ${filesAndFolders.length} item(s) in '$rawFolderPath'\n")
 
-      files.foreach { file =>
-        processFile(spark, file)
+      var success = 0
+      var failed = 0
+
+      filesAndFolders.foreach { item =>
+        processItem(spark, item) match {
+          case true  => success += 1
+          case false => failed += 1
+        }
       }
 
-      println("🎉 All files processed successfully!")
+      println(s"\n🎉 Processing completed! Success: $success | Failed: $failed")
 
     } catch {
       case e: Exception =>
-        println(s"Error reading file: ${e.getMessage}")
+        println(s"❌ Critical error: ${e.getMessage}")
     } finally {
       spark.stop()
     }
   }
 
-  def processFile(spark: SparkSession, file: File): Unit = {
+  /** Handles both regular files and Parquet folders */
+  private def processItem(spark: SparkSession, item: File): Boolean = {
     try {
-      println(s"Processing file: ${file.getName}")
+      println(s"Processing → ${item.getName}")
 
-      val df = ExtractTxt.read(
-        spark = spark, 
-        filePath = file.getAbsolutePath, 
-        header = true, 
-        delimiter = ","
-      )
+      val df = ExtractFlatFiles.read(spark, item.getAbsolutePath)
+      ExtractFlatFiles.printContent(df)
+      true
 
-      ExtractTxt.printContent(df)
-      ExtractTxt.printSummary(df)
     } catch {
       case e: Exception =>
-        println(s"Error processing file '${file.getName}': ${e.getMessage}")
+        println(s"❌ Failed ${item.getName}: ${e.getMessage}")
+        println("-" * 80)
+        false
     }
   }
-
 }
