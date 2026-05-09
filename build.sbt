@@ -1,12 +1,27 @@
-val scala3Version = "3.8.3"
+ThisBuild / version := "0.1.0-SNAPSHOT"
 
-lazy val root = project
-  .in(file("."))
+ThisBuild / scalaVersion := "2.13.14"
+
+lazy val root = (project in file("."))
   .settings(
     name := "DistributedEtlPipeline",
-    version := "0.1.0-SNAPSHOT",
 
-    scalaVersion := scala3Version,
+    libraryDependencies ++= Seq(
 
-    libraryDependencies += "org.scalameta" %% "munit" % "1.3.0" % Test
+      // Spark Core
+      "org.apache.spark" %% "spark-core" % "3.5.1",
+
+      // Spark SQL
+      "org.apache.spark" %% "spark-sql" % "3.5.1",
+
+      // Testing
+      "org.scalameta" %% "munit" % "1.0.0" % Test
+    )
   )
+
+fork := true
+
+javaOptions ++= Seq(
+  "--add-exports=java.base/sun.nio.ch=ALL-UNNAMED",
+  "--add-opens=java.base/java.nio=ALL-UNNAMED"
+)

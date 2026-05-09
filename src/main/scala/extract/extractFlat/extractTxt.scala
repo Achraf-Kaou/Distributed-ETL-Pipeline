@@ -4,17 +4,18 @@ import org.apache.spark.sql.{SparkSession, DataFrame}
 
 object ExtractTxt {
 
-  def read(spark: SparkSession, filePath: String, header: Boolean, delimiter: String ): DataFrame = {
-    println(header.toString())
+  def read(spark: SparkSession, filePath: String, header: Boolean = true, delimiter: String ): DataFrame = {
     spark.read
-      .option("header", "true")      // Set to true if first line is header
+      .option("header", header.toString())
       .option("inferSchema", "true")
       .option("delimiter", delimiter)
+      .option("mode", "PERMISSIVE")
+      .option("encoding", "UTF-8")
       .csv(filePath)
   }
 
-  def printContent(df: DataFrame, fileName: String): Unit = {
-    println(s"\n=== Content of $fileName ===\n")
+  def printContent(df: DataFrame): Unit = {
+    println(s"\n=== Content of file ===")
     
     println("Schema:")
     df.printSchema()
@@ -24,5 +25,10 @@ object ExtractTxt {
     df.show(100, truncate = false)
     
     println(s"Total lines: ${df.count()}")
+  }
+
+  def printSummary(df: DataFrame): Unit = {
+    println("\nColumn Summary:")
+    df.describe().show(truncate = false)
   }
 }

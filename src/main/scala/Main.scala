@@ -14,29 +14,18 @@ object Main {
 
     spark.sparkContext.setLogLevel("ERROR")
 
-    val filePath = "data/raw/example.txt"
-
     try {
 
       // Read the TXT file using Spark
-      val df = ExtractTxt.read(spark, filePath, header = false, delimiter = ",")
-      println("============= Raw DataFrame =============")
-      df.collect().foreach(row => println(row.getString(0))) // Print raw lines
-      
-      // Print the content
-      ExtractTxt.printContent(df, filePath)
+      val df = ExtractTxt.read(
+        spark = spark, 
+        filePath = "data/raw/example.txt", 
+        header = true, 
+        delimiter = ","
+      )
 
-      // You can now use the data like this:
-      println("\n=== Examples of using the data ===")
-      
-      // Example 1: Show only specific columns
-      df.select("Name", "Age", "City").show(5)
-
-      // Example 2: Filter data
-      df.filter("Age > 30").show()
-
-      // Example 3: Count by City
-      df.groupBy("City").count().show()
+      ExtractTxt.printContent(df)
+      ExtractTxt.printSummary(df)
 
     } catch {
       case e: Exception =>
