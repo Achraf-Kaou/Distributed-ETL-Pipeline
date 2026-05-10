@@ -1,6 +1,7 @@
 import org.apache.spark.sql.SparkSession
 import extract.ExtractFlatFiles
 import extract.ExtractApi
+import extract.ExtractDatabase
 import java.io.File
 
 object Main {
@@ -31,23 +32,89 @@ object Main {
 
       println(s"\n🎉 Processing completed! Success: $success | Failed: $failed") */
 
-      val dfApi = ExtractApi.read(
+      /* val dfApi = ExtractApi.read(
         spark = spark,
         url = "https://jsonplaceholder.typicode.com/users",
         rootField = ""
       )
 
-      ExtractApi.printContent(dfApi, "API - Users")
+      ExtractApi.printContent(dfApi, "API - Users") */
 
-
-      val dfApi2 = ExtractApi.read(
-        spark = spark,
-        url = "https://api.publicapis.org/entries",
-        rootField = "entries"
+      // ─── 1. PostgreSQL ─────────────────────────────────────────────────────
+      // In production, load credentials from env vars or a secrets manager:
+      //   sys.env.getOrElse("PG_USER", "etl_user")
+      val pgConfig = ExtractDatabase.PostgresConfig(
+        host     = "localhost",
+        port     = 5432,
+        database = "etl_db",
+        user     = "etl_user",
+        password = "etl_pass"
       )
 
-      ExtractApi.printContent(dfApi2, "API - Users")
+      val pgUsers = ExtractDatabase.read(spark, pgConfig, "users")
+      ExtractDatabase.printContent(pgUsers, "PostgreSQL → users")
 
+      val pgProducts = ExtractDatabase.read(spark, pgConfig, "products")
+      ExtractDatabase.printContent(pgProducts, "PostgreSQL → products")
+
+      // Custom SQL query example — subquery must be aliased
+      val pgExpensive = ExtractDatabase.read(
+        spark, pgConfig,
+        "(SELECT name, price, category FROM products WHERE price > 100.00) AS expensive"
+      )
+      ExtractDatabase.printContent(pgExpensive, "PostgreSQL → products WHERE price > 100")
+
+
+      // ─── 2. MySQL 8 ────────────────────────────────────────────────────────
+      val mysqlConfig = ExtractDatabase.MySQLConfig(
+        host     = "localhost",
+        port     = 3306,
+        database = "etl_db",
+        user     = "etl_user",
+        password = "etl_pass"
+      )
+
+      val mysqlUsers = ExtractDatabase.read(spark, mysqlConfig, "users")
+      ExtractDatabase.printContent(mysqlUsers, "MySQL → users")
+
+      val mysqlProducts = ExtractDatabase.read(spark, mysqlConfig, "products")
+      ExtractDatabase.printContent(mysqlProducts, "MySQL → products")
+
+      // Partitioned read example — useful when users table grows large.
+      // partitionColumn must be numeric; bounds should bracket the actual data.
+      val mysqlPartitioned = ExtractDatabase.readPartitioned(
+        spark         = spark,
+        config        = mysqlConfig,
+        table         = "users",
+        partitionColumn = "id",
+        lowerBound    = 1L,
+        upperBound    = 1000L,
+        numPartitions = 4
+      )
+      ExtractDatabase.printContent(mysqlPartitioned, "MySQL → users (partitioned read)")
+
+      // ─── 3. SQLite ─────────────────────────────────────────────────────────
+      // The path must match where docker-compose mounts the sqlite_data volume.
+      // If running locally without Docker: point to any local .db file.
+      val sqliteConfig = ExtractDatabase.SQLiteConfig(
+        filePath = "./docker/sqlite/data/etl.db"
+      )
+
+      val sqliteUsers = ExtractDatabase.read(spark, sqliteConfig, "users")
+      ExtractDatabase.printContent(sqliteUsers, "SQLite → users")
+
+      val sqliteProducts = ExtractDatabase.read(spark, sqliteConfig, "products")
+      ExtractDatabase.printContent(sqliteProducts, "SQLite → products")
+
+      // ─── Cross-DB join example ─────────────────────────────────────────────
+      // Real ETL scenario: merge users from two sources, deduplicate by email.
+      println("\n=== 🔗 Cross-source merge: PostgreSQL + MySQL users ===")
+      val merged = pgUsers
+        .union(mysqlUsers)
+        .dropDuplicates("email")   // deduplicate — same seed data in both DBs
+
+      ExtractDatabase.printContent(merged, "Merged users (PG ∪ MySQL, deduplicated)")
+    
     } catch {
       case e: Exception =>
         println(s"❌ Critical error: ${e.getMessage}")

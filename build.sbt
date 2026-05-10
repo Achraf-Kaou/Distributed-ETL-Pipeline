@@ -22,6 +22,11 @@ lazy val root = (project in file("."))
       // HTTP Client for API calls 
       "com.lihaoyi"      %% "requests"       % "0.9.0",
 
+      // JDBC Drivers
+      "org.postgresql" %  "postgresql"           % "42.7.3",
+      "mysql"          %  "mysql-connector-java" % "8.0.33",
+      "org.xerial"     %  "sqlite-jdbc"          % "3.45.3.0",
+
       // Testing
       "org.scalameta" %% "munit" % "1.0.0" % Test
     )
