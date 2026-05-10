@@ -21,19 +21,23 @@ object ExtractApi {
     println(s"Fetching data from API: $url")
 
     try {
+
+      // Make the HTTP request
       val response = requests.get(
         url = url,
         params = params,
         headers = headers
       )
 
+      // Check for successful response
       if (response.statusCode != 200) {
         throw new Exception(s"HTTP ${response.statusCode}: ${response.text()}")
       }
 
+      // Get the response body as a string
       val jsonString = response.text()
 
-      import spark.implicits._
+      import spark.implicits._ // Import Spark implicits (needed for .toDS())
 
       // Create DataFrame from JSON string
       var df = spark.read

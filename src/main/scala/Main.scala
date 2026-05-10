@@ -17,29 +17,10 @@ object Main {
     val rawFolderPath = "data/raw"
 
     try {
-      val rawDir = new File(rawFolderPath)
-
-      if (!rawDir.exists() || !rawDir.isDirectory) {
-        println(s"❌ Folder '$rawFolderPath' not found!")
-        println("Please create the folder and put your files/folders inside.")
-        return
-      }
-
-      // Improved filtering: exclude hidden/temp files
-      val filesAndFolders = rawDir.listFiles()
-        .filter(f => f.isFile || (f.isDirectory && f.getName.endsWith(".parquet")))
-        .filter(f => !f.getName.startsWith(".") && !f.getName.startsWith("_"))
-        .sortBy(_.getName)
-
-      if (filesAndFolders.isEmpty) {
-        println(s"⚠️ No files or Parquet folders found in '$rawFolderPath'.")
-        return
-      }
-
-      println(s"✅ Found ${filesAndFolders.length} item(s) in '$rawFolderPath'\n")
-
-      var success = 0
+      /* var success = 0
       var failed = 0
+
+      val filesAndFolders = findItems(rawFolderPath)
 
       filesAndFolders.foreach { item =>
         processItem(spark, item) match {
@@ -48,7 +29,7 @@ object Main {
         }
       }
 
-      println(s"\n🎉 Processing completed! Success: $success | Failed: $failed")
+      println(s"\n🎉 Processing completed! Success: $success | Failed: $failed") */
 
       val dfApi = ExtractApi.read(
         spark = spark,
@@ -61,7 +42,7 @@ object Main {
 
       val dfApi2 = ExtractApi.read(
         spark = spark,
-        url = "https://jsonplaceholder.typicode.com/users",
+        url = "https://api.publicapis.org/entries",
         rootField = "entries"
       )
 
@@ -90,5 +71,32 @@ object Main {
         println("-" * 80)
         false
     }
+  }
+
+  def findItems(folderPath: String): Array[File] = {
+    val rawDir = new File(folderPath)
+
+    // check if folder exists and is a directory
+    if (!rawDir.exists() || !rawDir.isDirectory) {
+      println(s"❌ Folder '$folderPath' not found!")
+      println("Please create the folder and put your files/folders inside.")
+      return Array.empty[File]
+    }
+
+    // Improved filtering: exclude hidden/temp files
+    val filesAndFolders = rawDir.listFiles()
+      .filter(f => f.isFile || (f.isDirectory && f.getName.endsWith(".parquet")))
+      .filter(f => !f.getName.startsWith(".") && !f.getName.startsWith("_"))
+      .sortBy(_.getName)
+
+    // check if any files or folders found
+    if (filesAndFolders.isEmpty) {
+      println(s"⚠️ No files or Parquet folders found in '$folderPath'.")
+      return Array.empty[File]
+    }
+
+    println(s"✅ Found ${filesAndFolders.length} item(s) in '$folderPath'\n")
+
+    return filesAndFolders
   }
 }
