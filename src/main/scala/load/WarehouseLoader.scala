@@ -84,10 +84,7 @@ object WarehouseLoader {
       s"${f.name} $t"
     }.mkString(", ")
     val unique = if (businessKeys.nonEmpty) s", UNIQUE (${businessKeys.mkString(",")})" else ""
-    val createSql = dbType match {
-      case "mysql" => s"CREATE TABLE IF NOT EXISTS $table ($cols$unique)"
-      case _       => s"CREATE TABLE IF NOT EXISTS $table ($cols$unique)"
-    }
+    val createSql = s"CREATE TABLE IF NOT EXISTS $table ($cols$unique)"
     executeSql(conn, createSql)
   }
 
