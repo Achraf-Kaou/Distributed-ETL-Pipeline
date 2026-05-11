@@ -1,0 +1,5 @@
+dept_id,dept_name,manager,location,budget
+Finance,Finance Department,Paul Dubois,Marseille,890000
+IT,Information Technology,Alice Dupont,Paris,1200000
+Marketing,Marketing & Sales,Emma Laurent,Bordeaux,670000
+HR,Human Resources,Bob Martin,Lyon,450000

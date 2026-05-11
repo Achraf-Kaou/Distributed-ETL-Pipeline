@@ -1,8 +1,0 @@
-ID,Name,Age,City
-1,Alice,28,Paris
-2,Bob,34,Lyon
-3,Charlie,22,Marseille
-4,David,45,Nice
-5,Emma,31,Bordeaux
-This is a normal text line.
-Another line with some data.

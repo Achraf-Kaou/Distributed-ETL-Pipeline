@@ -1,0 +1,4 @@
+ID,Full Name,Age,Location,Email,Dept,Salary,StartDate,Status
+5,David Leclerc,45,Toulouse,France,david@leclerc.fr,IT,75000,2021-03-12,Active
+6,Sophie Bernard,29,Lille,France,sophie.b@company.fr,Marketing,49000,2024-02-28,Active
+7,John Smith,,London,UK,john.smith@company.com,IT,68000,2023-06-01,Active

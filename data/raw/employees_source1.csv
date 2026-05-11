@@ -1,0 +1,5 @@
+id,full_name,age,city,country,email,department,salary,join_date,status
+1,Alice Dupont,28,Paris,France,alice.dupont@company.fr,IT,45000,2023-05-15,Active
+2,Bob Martin,34,Lyon,France,bob.martin@company.fr,HR,52000,2022-11-20,Active
+3,Charlie Moreau,22,Marseille,France,charlie.m@company.fr,Finance,38000,2024-01-10,Active
+4,Emma Laurent,31,Bordeaux,France,emma.laurent@company.fr,Marketing,61000,2023-08-05,Inactive

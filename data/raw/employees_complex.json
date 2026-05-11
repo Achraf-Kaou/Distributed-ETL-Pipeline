@@ -1,0 +1,45 @@
+{
+  "metadata": {
+    "source": "api_v2",
+    "generated_at": "2026-05-11",
+    "total_records": 5
+  },
+  "employees": [
+    {
+      "id": 8,
+      "personal_info": {
+        "full_name": "Marie Dubois",
+        "age": 33,
+        "email": "marie.dubois@company.fr"
+      },
+      "employment": {
+        "department": "IT",
+        "salary": 72000,
+        "join_date": "2024-02-01",
+        "status": "Active"
+      },
+      "address": {
+        "city": "Nice",
+        "country": "France"
+      }
+    },
+    {
+      "id": 9,
+      "personal_info": {
+        "full_name": "Lucas Moreau",
+        "age": 27,
+        "email": "lucas.m@company.fr"
+      },
+      "employment": {
+        "department": "Finance",
+        "salary": 58000,
+        "join_date": "2025-01-15",
+        "status": "Active"
+      },
+      "address": {
+        "city": "Paris",
+        "country": "France"
+      }
+    }
+  ]
+}

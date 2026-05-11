@@ -1,9 +1,8 @@
-import org.apache.spark.sql.SparkSession
-import extract.ExtractFlatFiles
-import extract.ExtractApi
-import extract.ExtractDatabase
-import transform.TransformClean
+import org.apache.spark.sql.{SparkSession, DataFrame}
+import extract.{ExtractFlatFiles, ExtractApi}
+import transform.{TransformClean, TransformDeduplicate}
 import transform.TransformClean.CleanConfig
+import transform.TransformDeduplicate.DeduplicateConfig
 import org.apache.spark.sql.types._
 import java.io.File
 
@@ -12,193 +11,148 @@ object Main {
   def main(args: Array[String]): Unit = {
     
     val spark = SparkSession.builder()
-      .appName("Distributed ETL - Raw Data Processor")
+      .appName("Distributed ETL Pipeline")
       .master("local[*]")
       .getOrCreate()
 
     spark.sparkContext.setLogLevel("ERROR")
 
-    val rawFolderPath = "data/test"
-
+    val pipeline = new EtlPipeline(spark)
+    
     try {
-
-      // Define cleaning rules
-      val cleanConfig = CleanConfig(
-        criticalColumns = Seq("id", "name", "email"),           // must have these
-        fillValues = Map(
-          "country" -> "Unknown",
-          "age" -> "0",
-          "salary" -> "0"
-        ),
-        stringColumns = Seq("name", "city", "country", "email"),
-        castColumns = Map(
-          "age" -> IntegerType,
-          "salary" -> DoubleType,
-          "join_date" -> DateType
-        ),
-        dropRowsWithNullsThreshold = 0.7,   // drop rows with >70% nulls
-        verbose = true
-      )
-
-      extractFlatFiles(spark, rawFolderPath, cleanConfig)
-
-
-      /* val dfApi = ExtractApi.read(
-        spark = spark,
-        url = "https://jsonplaceholder.typicode.com/users",
-        rootField = ""
-      )
-
-      ExtractApi.printContent(dfApi, "API - Users") */
-
-     /*  // ─── 1. PostgreSQL ─────────────────────────────────────────────────────
-      // In production, load credentials from env vars or a secrets manager:
-      //   sys.env.getOrElse("PG_USER", "etl_user")
-      val pgConfig = ExtractDatabase.PostgresConfig(
-        host     = "localhost",
-        port     = 5432,
-        database = "etl_db",
-        user     = "etl_user",
-        password = "etl_pass"
-      )
-
-      val pgUsers = ExtractDatabase.read(spark, pgConfig, "users")
-      ExtractDatabase.printContent(pgUsers, "PostgreSQL → users")
-
-      val pgProducts = ExtractDatabase.read(spark, pgConfig, "products")
-      ExtractDatabase.printContent(pgProducts, "PostgreSQL → products")
-
-      // Custom SQL query example — subquery must be aliased
-      val pgExpensive = ExtractDatabase.read(
-        spark, pgConfig,
-        "(SELECT name, price, category FROM products WHERE price > 100.00) AS expensive"
-      )
-      ExtractDatabase.printContent(pgExpensive, "PostgreSQL → products WHERE price > 100")
-
-
-      // ─── 2. MySQL 8 ────────────────────────────────────────────────────────
-      val mysqlConfig = ExtractDatabase.MySQLConfig(
-        host     = "localhost",
-        port     = 3306,
-        database = "etl_db",
-        user     = "etl_user",
-        password = "etl_pass"
-      )
-
-      val mysqlUsers = ExtractDatabase.read(spark, mysqlConfig, "users")
-      ExtractDatabase.printContent(mysqlUsers, "MySQL → users")
-
-      val mysqlProducts = ExtractDatabase.read(spark, mysqlConfig, "products")
-      ExtractDatabase.printContent(mysqlProducts, "MySQL → products")
-
-      // Partitioned read example — useful when users table grows large.
-      // partitionColumn must be numeric; bounds should bracket the actual data.
-      val mysqlPartitioned = ExtractDatabase.readPartitioned(
-        spark         = spark,
-        config        = mysqlConfig,
-        table         = "users",
-        partitionColumn = "id",
-        lowerBound    = 1L,
-        upperBound    = 1000L,
-        numPartitions = 4
-      )
-      ExtractDatabase.printContent(mysqlPartitioned, "MySQL → users (partitioned read)")
-
-      // ─── 3. SQLite ─────────────────────────────────────────────────────────
-      // The path must match where docker-compose mounts the sqlite_data volume.
-      // If running locally without Docker: point to any local .db file.
-      val sqliteConfig = ExtractDatabase.SQLiteConfig(
-        filePath = "./docker/sqlite/data/etl.db"
-      )
-
-      val sqliteUsers = ExtractDatabase.read(spark, sqliteConfig, "users")
-      ExtractDatabase.printContent(sqliteUsers, "SQLite → users")
-
-      val sqliteProducts = ExtractDatabase.read(spark, sqliteConfig, "products")
-      ExtractDatabase.printContent(sqliteProducts, "SQLite → products")
-
-      // ─── Cross-DB join example ─────────────────────────────────────────────
-      // Real ETL scenario: merge users from two sources, deduplicate by email.
-      println("\n=== 🔗 Cross-source merge: PostgreSQL + MySQL users ===")
-      val merged = pgUsers
-        .union(mysqlUsers)
-        .dropDuplicates("email")   // deduplicate — same seed data in both DBs
-
-      ExtractDatabase.printContent(merged, "Merged users (PG ∪ MySQL, deduplicated)")
-     */
+      pipeline.run()
     } catch {
       case e: Exception =>
-        println(s"❌ Critical error: ${e.getMessage}")
+        println(s"❌ Pipeline failed: ${e.getMessage}")
+        e.printStackTrace()
     } finally {
       spark.stop()
     }
   }
+}
 
-  /** Handles both regular files and Parquet folders */
-  private def processItem(spark: SparkSession, item: File, cleanConfig: CleanConfig): Boolean = {
-    try {
-      println(s"Processing → ${item.getName}")
+// ===================================================================
+// ETL Pipeline Orchestrator
+// ===================================================================
 
-      val df = ExtractFlatFiles.read(spark, item.getAbsolutePath)
-      ExtractFlatFiles.printContent(df)
+class EtlPipeline(spark: SparkSession) {
 
-      val cleanedDF = TransformClean.clean(df, cleanConfig)
+  private val rawFolderPath = "data/raw"
+  private val outputBase    = "output"
 
-      val outputPath = s"output/cleaned/${item.getName.replace(".", "_")}_cleaned"
+  def run(): Unit = {
+    println("=" * 90)
+    println("🚀 Starting Distributed ETL Pipeline")
+    println("=" * 90)
 
-      cleanedDF.write.mode("overwrite").parquet(outputPath)
+    // 1. Extract
+    val rawDF = extract()
 
-      println(s"✅ Saved → $outputPath")
-      true
-
-    } catch {
-      case e: Exception =>
-        println(s"❌ Failed ${item.getName}: ${e.getMessage}")
-        println("-" * 80)
-        false
+    if (rawDF.isEmpty) {
+      println("⚠️ No data extracted. Exiting.")
+      return
     }
+
+    // 2. Clean
+    val cleanedDF = clean(rawDF)
+
+    // 3. Deduplicate
+    val finalDF = deduplicate(cleanedDF)
+
+    // 4. Save
+    save(finalDF, format = "parquet")
+    save(finalDF, format = "csv")
+
+    println("\n🎉 ETL Pipeline completed successfully!")
   }
 
-  def findItems(folderPath: String): Array[File] = {
-    val rawDir = new File(folderPath)
+  private def extract(): DataFrame = {
+    println("\n📥 Extraction Phase")
+    val items = findItems(rawFolderPath)
+    
+    if (items.isEmpty) return spark.emptyDataFrame
 
-    // check if folder exists and is a directory
-    if (!rawDir.exists() || !rawDir.isDirectory) {
-      println(s"❌ Folder '$folderPath' not found!")
-      println("Please create the folder and put your files/folders inside.")
-      return Array.empty[File]
+    // For now: process first file (you can extend to union multiple)
+    val firstItem = items.head
+    println(s"Processing: ${firstItem.getName}")
+    
+    ExtractFlatFiles.read(spark, firstItem.getAbsolutePath)
+  }
+
+  private def clean(df: DataFrame): DataFrame = {
+    println("\n🧹 Cleaning Phase")
+    
+    val cleanConfig = CleanConfig(
+      criticalColumns = Seq("id", "name", "email"),
+      fillValues = Map(
+        "country"    -> "Unknown",
+        "age"        -> "0",
+        "salary"     -> "0",
+        "department" -> "Unknown"
+      ),
+      stringColumns = Seq("name", "city", "country", "email", "department", "status"),
+      castColumns = Map(
+        "age"       -> IntegerType,
+        "salary"    -> DoubleType,
+        "join_date" -> DateType
+      ),
+      dropRowsWithNullsThreshold = 0.7,
+      verbose = true
+    )
+
+    TransformClean.clean(df, cleanConfig)
+  }
+
+  private def deduplicate(df: DataFrame): DataFrame = {
+    println("\n🔁 Deduplication Phase")
+
+    if (!df.columns.contains("email")) {
+      println("⚠️ Skipping deduplication (no 'email' column found)")
+      return df
     }
 
-    // Improved filtering: exclude hidden/temp files
-    val filesAndFolders = rawDir.listFiles()
+    val dedupConfig = DeduplicateConfig(
+      keyColumns     = Seq("email"),
+      recencyColumn  = Some("join_date"),
+      sourcePriority = Map("file" -> 1, "api" -> 2, "postgres" -> 3),
+      sourceTag      = Some("file"),
+      dropSourceCol  = true,
+      verbose        = true
+    )
+
+    val taggedDF = TransformDeduplicate.tag(df, "file")
+    TransformDeduplicate.deduplicate(taggedDF, dedupConfig)
+  }
+
+  private def save(df: DataFrame, format: String = "parquet"): Unit = {
+    val outputPath = s"$outputBase/final/${System.currentTimeMillis()}_final"
+    format.toLowerCase match {
+      case "csv" =>
+        df.coalesce(1)
+          .write
+          .mode("overwrite")
+          .option("header", "true")
+          .option("delimiter", ",")
+          .csv(outputPath)
+        
+      case "parquet" | _ =>
+        df.write.mode("overwrite").parquet(outputPath)
+    }
+    
+    println(s"💾 Data saved as $format → $outputPath")
+  }
+
+  // Helper methods
+  private def findItems(folderPath: String): Array[File] = {
+    val dir = new File(folderPath)
+    if (!dir.exists() || !dir.isDirectory) {
+      println(s"❌ Folder not found: $folderPath")
+      return Array.empty
+    }
+
+    dir.listFiles()
       .filter(f => f.isFile || (f.isDirectory && f.getName.endsWith(".parquet")))
       .filter(f => !f.getName.startsWith(".") && !f.getName.startsWith("_"))
       .sortBy(_.getName)
-
-    // check if any files or folders found
-    if (filesAndFolders.isEmpty) {
-      println(s"⚠️ No files or Parquet folders found in '$folderPath'.")
-      return Array.empty[File]
-    }
-
-    println(s"✅ Found ${filesAndFolders.length} item(s) in '$folderPath'\n")
-
-    return filesAndFolders
-  }
-
-  def extractFlatFiles(spark: SparkSession, rawFolderPath: String, cleanConfig: CleanConfig): Unit = {
-    var success = 0
-    var failed = 0
-
-    val filesAndFolders = findItems(rawFolderPath)
-
-    filesAndFolders.foreach { item =>
-      processItem(spark, item, cleanConfig) match {
-        case true  => success += 1
-        case false => failed += 1
-      }
-    }
-
-    println(s"\n🎉 Processing completed! Success: $success | Failed: $failed")
   }
 }
