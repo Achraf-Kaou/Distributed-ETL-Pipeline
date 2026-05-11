@@ -105,10 +105,9 @@ object WarehouseLoader {
     val safeColumns = columns.map(c => quotedIdentifier(c, dbType))
     val safeBusinessKeys = businessKeys.map(k => quotedIdentifier(k, dbType))
     val colList = safeColumns.mkString(",")
-    val selectList = safeColumns.mkString(",")
     val nonKeyCols = columns.filterNot(c => businessKeys.contains(c))
     val safeNonKeyCols = nonKeyCols.map(c => quotedIdentifier(c, dbType))
-    val plainInsert = s"INSERT INTO $targetTable ($colList) SELECT $selectList FROM $stagingTable"
+    val plainInsert = s"INSERT INTO $targetTable ($colList) SELECT $colList FROM $stagingTable"
 
     if (safeBusinessKeys.isEmpty) return plainInsert
 
