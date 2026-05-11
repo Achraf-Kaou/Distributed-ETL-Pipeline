@@ -106,6 +106,7 @@ object TransformDeduplicate {
 
     require(config.keyColumns.nonEmpty,
       "DeduplicateConfig.keyColumns must not be empty — define your business key.")
+    validateColumns(df, config)
 
     val initialCount = df.count()
     if (config.verbose) printHeader(df, config, initialCount)
@@ -120,7 +121,11 @@ object TransformDeduplicate {
 
     // Step 2 — map __source → __priority integer for ordering
     val hasPriority = config.sourcePriority.nonEmpty &&
-                      result.columns.contains(COL_SOURCE)
+                       result.columns.contains(COL_SOURCE)
+
+    if (hasPriority) {
+      warnOnUnmappedSources(result, config.sourcePriority)
+    }
 
     if (hasPriority) {
       val priorityMap = map(
@@ -173,6 +178,42 @@ object TransformDeduplicate {
     if (config.verbose) printReport(initialCount, result.count(), config)
 
     result
+  }
+
+  private def validateColumns(df: DataFrame, config: DeduplicateConfig): Unit = {
+    val missingKeys = config.keyColumns.distinct.filterNot(df.columns.contains)
+    if (missingKeys.nonEmpty) {
+      throw new IllegalArgumentException(
+        s"Deduplication key column(s) missing: ${missingKeys.mkString(", ")}. " +
+        s"Available columns: ${df.columns.mkString(", ")}"
+      )
+    }
+
+    val missingRecency = config.recencyColumn.filter(colName => !df.columns.contains(colName))
+    if (missingRecency.nonEmpty) {
+      throw new IllegalArgumentException(
+        s"Deduplication recency column '${missingRecency.get}' not found. " +
+        s"Available columns: ${df.columns.mkString(", ")}"
+      )
+    }
+  }
+
+  private def warnOnUnmappedSources(df: DataFrame, sourcePriority: Map[String, Int]): Unit = {
+    val observedSources = df
+      .select(col(COL_SOURCE))
+      .where(col(COL_SOURCE).isNotNull)
+      .distinct()
+      .collect()
+      .flatMap(r => Option(r.get(0)).map(_.toString))
+      .toSet
+
+    val unmapped = observedSources.diff(sourcePriority.keySet)
+    if (unmapped.nonEmpty) {
+      println(
+        s"⚠️ Source priority missing for source tag(s): ${unmapped.toSeq.sorted.mkString(", ")}. " +
+        s"These rows will use default priority value (${Int.MaxValue}, lowest precedence)."
+      )
+    }
   }
 
   // ─────────────────────────────────────────────────────────────────

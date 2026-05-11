@@ -22,6 +22,9 @@ lazy val root = (project in file("."))
       // HTTP Client for API calls 
       "com.lihaoyi"      %% "requests"       % "0.9.0",
 
+      // Application config (HOCON)
+      "com.typesafe"      % "config"         % "1.4.3",
+
       // JDBC Drivers
       "org.postgresql" %  "postgresql"           % "42.7.3",
       "mysql"          %  "mysql-connector-java" % "8.0.33",
@@ -42,4 +45,3 @@ lazy val root = (project in file("."))
     "-Xmx2G", 
     "-Dspark.ui.enabled=false"
   )
-
