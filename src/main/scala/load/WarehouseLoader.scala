@@ -110,6 +110,16 @@ object WarehouseLoader {
     val plainInsert = s"INSERT INTO $targetTable ($colList) SELECT $colList FROM $stagingTable"
 
     if (safeBusinessKeys.isEmpty) return plainInsert
+    if (safeNonKeyCols.isEmpty) {
+      return dbType match {
+        case "postgres" | "postgresql" | "sqlite" =>
+          plainInsert + s" ON CONFLICT (${safeBusinessKeys.mkString(",")}) DO NOTHING"
+        case "mysql" =>
+          s"INSERT IGNORE INTO $targetTable ($colList) SELECT $colList FROM $stagingTable"
+        case _ =>
+          plainInsert
+      }
+    }
 
     dbType match {
       case "postgres" | "postgresql" | "sqlite" =>
