@@ -2,6 +2,9 @@ import org.apache.spark.sql.SparkSession
 import extract.ExtractFlatFiles
 import extract.ExtractApi
 import extract.ExtractDatabase
+import transform.TransformClean
+import transform.TransformClean.CleanConfig
+import org.apache.spark.sql.types._
 import java.io.File
 
 object Main {
@@ -15,22 +18,30 @@ object Main {
 
     spark.sparkContext.setLogLevel("ERROR")
 
-    val rawFolderPath = "data/raw"
+    val rawFolderPath = "data/test"
 
     try {
-      /* var success = 0
-      var failed = 0
 
-      val filesAndFolders = findItems(rawFolderPath)
+      // Define cleaning rules
+      val cleanConfig = CleanConfig(
+        criticalColumns = Seq("id", "name", "email"),           // must have these
+        fillValues = Map(
+          "country" -> "Unknown",
+          "age" -> "0",
+          "salary" -> "0"
+        ),
+        stringColumns = Seq("name", "city", "country", "email"),
+        castColumns = Map(
+          "age" -> IntegerType,
+          "salary" -> DoubleType,
+          "join_date" -> DateType
+        ),
+        dropRowsWithNullsThreshold = 0.7,   // drop rows with >70% nulls
+        verbose = true
+      )
 
-      filesAndFolders.foreach { item =>
-        processItem(spark, item) match {
-          case true  => success += 1
-          case false => failed += 1
-        }
-      }
+      extractFlatFiles(spark, rawFolderPath, cleanConfig)
 
-      println(s"\n🎉 Processing completed! Success: $success | Failed: $failed") */
 
       /* val dfApi = ExtractApi.read(
         spark = spark,
@@ -40,7 +51,7 @@ object Main {
 
       ExtractApi.printContent(dfApi, "API - Users") */
 
-      // ─── 1. PostgreSQL ─────────────────────────────────────────────────────
+     /*  // ─── 1. PostgreSQL ─────────────────────────────────────────────────────
       // In production, load credentials from env vars or a secrets manager:
       //   sys.env.getOrElse("PG_USER", "etl_user")
       val pgConfig = ExtractDatabase.PostgresConfig(
@@ -114,7 +125,7 @@ object Main {
         .dropDuplicates("email")   // deduplicate — same seed data in both DBs
 
       ExtractDatabase.printContent(merged, "Merged users (PG ∪ MySQL, deduplicated)")
-    
+     */
     } catch {
       case e: Exception =>
         println(s"❌ Critical error: ${e.getMessage}")
@@ -124,12 +135,20 @@ object Main {
   }
 
   /** Handles both regular files and Parquet folders */
-  private def processItem(spark: SparkSession, item: File): Boolean = {
+  private def processItem(spark: SparkSession, item: File, cleanConfig: CleanConfig): Boolean = {
     try {
       println(s"Processing → ${item.getName}")
 
       val df = ExtractFlatFiles.read(spark, item.getAbsolutePath)
       ExtractFlatFiles.printContent(df)
+
+      val cleanedDF = TransformClean.clean(df, cleanConfig)
+
+      val outputPath = s"output/cleaned/${item.getName.replace(".", "_")}_cleaned"
+
+      cleanedDF.write.mode("overwrite").parquet(outputPath)
+
+      println(s"✅ Saved → $outputPath")
       true
 
     } catch {
@@ -165,5 +184,21 @@ object Main {
     println(s"✅ Found ${filesAndFolders.length} item(s) in '$folderPath'\n")
 
     return filesAndFolders
+  }
+
+  def extractFlatFiles(spark: SparkSession, rawFolderPath: String, cleanConfig: CleanConfig): Unit = {
+    var success = 0
+    var failed = 0
+
+    val filesAndFolders = findItems(rawFolderPath)
+
+    filesAndFolders.foreach { item =>
+      processItem(spark, item, cleanConfig) match {
+        case true  => success += 1
+        case false => failed += 1
+      }
+    }
+
+    println(s"\n🎉 Processing completed! Success: $success | Failed: $failed")
   }
 }

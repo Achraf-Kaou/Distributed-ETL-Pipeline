@@ -1,0 +1,8 @@
+ID,Full Name,Age,City,Country,Salary,JoinDate,Email,Department,Status
+1,Alice Dupont,28,Paris,France,45000,2023-05-15,alice.dupont@email.com,IT,Active
+2,Bob Martin,,Lyon,,52000,2022-11-20,bob.martin@company.com,HR,Inactive
+3,Charlie Moreau,22,Marseille,France,,2024-01-10,charlie.m@example.com,Finance,Active
+4,Emma Laurent,31,Bordeaux,France,61000,,emma.laurent@email.com,,Active
+5,David Leclerc,45,,,75000,2021-03-12,david@leclerc.fr,IT,
+6,Sophie Bernard,29,Lille,France,49000,2024-02-28,sophie.b@email.com,Marketing,Active
+7,John Doe, , , , , , , ,
