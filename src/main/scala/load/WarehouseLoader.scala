@@ -56,24 +56,27 @@ object WarehouseLoader {
     batchSize: Int = 500
   ): Unit = {
     if (df.isEmpty) return
-    val stagingTable = s"$stagingPrefix$targetTable"
+    val safeTarget = quotedIdentifier(targetTable, dbType)
+    val stagingTableName = s"$stagingPrefix$targetTable"
+    val safeStaging = quotedIdentifier(stagingTableName, dbType)
     df.write.mode("overwrite").format("jdbc")
       .option("url", jdbcUrl)
-      .option("dbtable", stagingTable)
+      .option("dbtable", stagingTableName)
       .option("driver", driver)
       .option("batchsize", batchSize)
       .options(propsToMap(props))
       .save()
 
     Using.resource(DriverManager.getConnection(jdbcUrl, props)) { conn =>
-      ensureTable(conn, targetTable, df, dbType, businessKeys)
-      val sql = buildUpsertSql(targetTable, stagingTable, df.columns.toSeq, businessKeys, dbType)
+      ensureTable(conn, safeTarget, df, dbType, businessKeys)
+      val sql = buildUpsertSql(safeTarget, safeStaging, df.columns.toSeq, businessKeys, dbType)
       executeSql(conn, sql)
     }
   }
 
   private def ensureTable(conn: Connection, table: String, df: DataFrame, dbType: String, businessKeys: Seq[String]): Unit = {
     val cols = df.schema.fields.map { f =>
+      val safeCol = quotedIdentifier(f.name, dbType)
       val t = f.dataType.typeName.toLowerCase match {
         case "integer" => "INTEGER"
         case "long"    => "BIGINT"
@@ -81,9 +84,10 @@ object WarehouseLoader {
         case "date"    => "DATE"
         case _         => "TEXT"
       }
-      s"${f.name} $t"
+      s"$safeCol $t"
     }.mkString(", ")
-    val unique = if (businessKeys.nonEmpty) s", UNIQUE (${businessKeys.mkString(",")})" else ""
+    val uniqueKeys = businessKeys.map(k => quotedIdentifier(k, dbType))
+    val unique = if (uniqueKeys.nonEmpty) s", UNIQUE (${uniqueKeys.mkString(",")})" else ""
     val createSql = s"CREATE TABLE IF NOT EXISTS $table ($cols$unique)"
     executeSql(conn, createSql)
   }
@@ -98,20 +102,23 @@ object WarehouseLoader {
     businessKeys: Seq[String],
     dbType: String
   ): String = {
-    val colList = columns.mkString(",")
-    val selectList = columns.mkString(",")
+    val safeColumns = columns.map(c => quotedIdentifier(c, dbType))
+    val safeBusinessKeys = businessKeys.map(k => quotedIdentifier(k, dbType))
+    val colList = safeColumns.mkString(",")
+    val selectList = safeColumns.mkString(",")
     val nonKeyCols = columns.filterNot(c => businessKeys.contains(c))
+    val safeNonKeyCols = nonKeyCols.map(c => quotedIdentifier(c, dbType))
     val plainInsert = s"INSERT INTO $targetTable ($colList) SELECT $selectList FROM $stagingTable"
 
-    if (businessKeys.isEmpty) return plainInsert
+    if (safeBusinessKeys.isEmpty) return plainInsert
 
     dbType match {
       case "postgres" | "postgresql" | "sqlite" =>
-        val updates = nonKeyCols.map(c => s"$c=excluded.$c").mkString(",")
+        val updates = safeNonKeyCols.map(c => s"$c=excluded.$c").mkString(",")
         plainInsert + " " +
-          s"ON CONFLICT (${businessKeys.mkString(",")}) DO UPDATE SET $updates"
+          s"ON CONFLICT (${safeBusinessKeys.mkString(",")}) DO UPDATE SET $updates"
       case "mysql" =>
-        val updates = nonKeyCols.map(c => s"$c=VALUES($c)").mkString(",")
+        val updates = safeNonKeyCols.map(c => s"$c=VALUES($c)").mkString(",")
         plainInsert + " " +
           s"ON DUPLICATE KEY UPDATE $updates"
       case other =>
@@ -148,5 +155,17 @@ object WarehouseLoader {
   private def propsToMap(props: java.util.Properties): Map[String, String] = {
     import scala.jdk.CollectionConverters._
     props.stringPropertyNames().asScala.map(k => k -> props.getProperty(k)).toMap
+  }
+
+  private def quotedIdentifier(identifier: String, dbType: String): String = {
+    val allowedPattern = "^[A-Za-z_][A-Za-z0-9_]*$"
+    require(
+      identifier.matches(allowedPattern),
+      s"Unsafe SQL identifier '$identifier'. Only letters, digits and underscore are allowed, and it must not start with a digit."
+    )
+    dbType match {
+      case "mysql" => s"`$identifier`"
+      case _       => s""""$identifier""""
+    }
   }
 }
