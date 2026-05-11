@@ -73,7 +73,7 @@ class EtlPipeline(spark: SparkSession, appConfig: AppConfig) {
     val aggregatedDF = orchestrator.runStage("aggregate") { aggregate(enrichedDF) }.getOrElse(enrichedDF)
 
     val starSchema = orchestrator.runStage("build_star") {
-      StarSchemaBuilder.build(spark, enrichedDF, appConfig.warehouse)
+      StarSchemaBuilder.build(spark, enrichedDF, appConfig.warehouse, logger.warn)
     }
 
     orchestrator.runStage("load") {

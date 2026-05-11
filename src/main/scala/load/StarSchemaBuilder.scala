@@ -14,16 +14,21 @@ object StarSchemaBuilder {
     factEmployeeMetrics: DataFrame
   )
 
-  def build(spark: SparkSession, df: DataFrame, warehouseConfig: WarehouseConfig): StarSchemaResult = {
+  def build(
+    spark: SparkSession,
+    df: DataFrame,
+    warehouseConfig: WarehouseConfig,
+    warnLogger: String => Unit = (m: String) => println(s"[WARN] $m")
+  ): StarSchemaResult = {
     import spark.implicits._
 
     val departmentCol = choose(df.columns, Seq("department", "dim_dept_name"))
     val employeeIdCol = choose(df.columns, Seq("email", "id"))
     val joinDateCol = choose(df.columns, Seq("join_date"))
 
-    if (departmentCol.isEmpty) println("[WARN] Star schema: missing department column, dim_department will be empty")
-    if (employeeIdCol.isEmpty) println("[WARN] Star schema: missing employee business key column, dim_employee will be empty")
-    if (joinDateCol.isEmpty) println("[WARN] Star schema: missing join_date column, dim_date will be empty")
+    if (departmentCol.isEmpty) warnLogger("Star schema: missing department column, dim_department will be empty")
+    if (employeeIdCol.isEmpty) warnLogger("Star schema: missing employee business key column, dim_employee will be empty")
+    if (joinDateCol.isEmpty) warnLogger("Star schema: missing join_date column, dim_date will be empty")
 
     val dimDepartment = if (departmentCol.nonEmpty) {
       df.select(col(departmentCol).as("department_name"))

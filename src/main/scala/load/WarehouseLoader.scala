@@ -4,6 +4,7 @@ import config.PipelineConfig.{UpsertConfig, WarehouseConfig, WarehouseTargetConf
 import extract.ExtractDatabase
 import org.apache.spark.sql.DataFrame
 import java.sql.{Connection, DriverManager}
+import scala.util.Using
 
 object WarehouseLoader {
 
@@ -64,13 +65,11 @@ object WarehouseLoader {
       .options(propsToMap(props))
       .save()
 
-    val conn = DriverManager.getConnection(jdbcUrl, props)
-    try {
+    Using.resource(DriverManager.getConnection(jdbcUrl, props)) { conn =>
       ensureTable(conn, targetTable, df, dbType, businessKeys)
       val sql = buildUpsertSql(targetTable, stagingTable, df.columns.toSeq, businessKeys, dbType)
-      val st = conn.createStatement()
-      try st.execute(sql) finally st.close()
-    } finally conn.close()
+      executeSql(conn, sql)
+    }
   }
 
   private def ensureTable(conn: Connection, table: String, df: DataFrame, dbType: String, businessKeys: Seq[String]): Unit = {
@@ -89,9 +88,11 @@ object WarehouseLoader {
       case "mysql" => s"CREATE TABLE IF NOT EXISTS $table ($cols$unique)"
       case _       => s"CREATE TABLE IF NOT EXISTS $table ($cols$unique)"
     }
-    val st = conn.createStatement()
-    try st.execute(createSql) finally st.close()
+    executeSql(conn, createSql)
   }
+
+  private def executeSql(conn: Connection, sql: String): Unit =
+    Using.resource(conn.createStatement())(_.execute(sql))
 
   private def buildUpsertSql(
     targetTable: String,
