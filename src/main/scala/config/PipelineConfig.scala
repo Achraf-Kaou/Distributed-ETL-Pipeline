@@ -200,14 +200,33 @@ object PipelineConfig {
       rightDbRef = getStringOrElse(c, "right-db-ref", ""),
       joinType = c.getString("join-type"),
       keyColumns = getStringSeq(c, "key-columns"),
-      keyMappings = getConfigSeq(c, "key-mappings").map { m =>
-        m.getString("left") -> m.getString("right")
-      },
+      keyMappings = parseKeyMappings(c),
       selectColumns = getStringSeq(c, "select-columns"),
       leftPrefix = getStringOrElse(c, "left-prefix", ""),
       rightPrefix = getStringOrElse(c, "right-prefix", ""),
       verbose = getBooleanOrElse(c, "verbose", true)
     )
+
+  private def parseKeyMappings(c: Config): Seq[(String, String)] = {
+    getConfigSeq(c, "key-mappings").zipWithIndex.map { case (m, idx) =>
+      try {
+        val left = m.getString("left").trim
+        val right = m.getString("right").trim
+        if (left.isEmpty || right.isEmpty) {
+          throw new IllegalArgumentException("left/right values must be non-empty.")
+        }
+        left -> right
+      } catch {
+        case e: Exception =>
+          val joinName = getStringOrElse(c, "name", "<unknown-join>")
+          throw new IllegalArgumentException(
+            s"Invalid key-mappings entry in join '$joinName' at index $idx. " +
+            s"Each entry must contain non-empty 'left' and 'right' fields.",
+            e
+          )
+      }
+    }
+  }
 
   private def parseLoad(c: Config): LoadConfig =
     LoadConfig(

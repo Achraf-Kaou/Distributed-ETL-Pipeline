@@ -121,7 +121,11 @@ object TransformDeduplicate {
 
     // Step 2 — map __source → __priority integer for ordering
     val hasPriority = config.sourcePriority.nonEmpty &&
-                      result.columns.contains(COL_SOURCE)
+                       result.columns.contains(COL_SOURCE)
+
+    if (hasPriority) {
+      warnOnUnmappedSources(result, config.sourcePriority)
+    }
 
     if (hasPriority) {
       val priorityMap = map(
@@ -185,11 +189,29 @@ object TransformDeduplicate {
       )
     }
 
-    val missingRecency = config.recencyColumn.filterNot(df.columns.contains)
+    val missingRecency = config.recencyColumn.filter(colName => !df.columns.contains(colName))
     if (missingRecency.nonEmpty) {
       throw new IllegalArgumentException(
         s"Deduplication recency column '${missingRecency.get}' not found. " +
         s"Available columns: ${df.columns.mkString(", ")}"
+      )
+    }
+  }
+
+  private def warnOnUnmappedSources(df: DataFrame, sourcePriority: Map[String, Int]): Unit = {
+    val observedSources = df
+      .select(col(COL_SOURCE))
+      .where(col(COL_SOURCE).isNotNull)
+      .distinct()
+      .collect()
+      .flatMap(r => Option(r.get(0)).map(_.toString))
+      .toSet
+
+    val unmapped = observedSources.diff(sourcePriority.keySet)
+    if (unmapped.nonEmpty) {
+      println(
+        s"⚠️ Source priority missing for source tag(s): ${unmapped.toSeq.sorted.mkString(", ")}. " +
+        s"These rows will use default priority value (${Int.MaxValue}, lowest precedence)."
       )
     }
   }

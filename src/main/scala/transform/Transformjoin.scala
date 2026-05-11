@@ -135,12 +135,12 @@ object TransformJoin {
     )
 
     val joinType = JoinType.fromString(config.joinType)
-    val joinPairs = if (config.keyMappings.nonEmpty) config.keyMappings else config.keyColumns.map(k => k -> k)
-    val leftKeys = joinPairs.map(_._1)
-    val rightKeys = joinPairs.map(_._2)
+    val keyPairs = if (config.keyMappings.nonEmpty) config.keyMappings else config.keyColumns.map(k => k -> k)
+    val leftKeys = keyPairs.map(_._1)
+    val rightKeys = keyPairs.map(_._2)
 
     // Step 1 — validate keys exist on both sides (fail fast)
-    validateKeys(left, right, joinPairs)
+    validateKeys(left, right, keyPairs)
 
     if (config.verbose) printHeader(left, right, config, joinType)
 
@@ -150,12 +150,12 @@ object TransformJoin {
     )
 
     // Step 3 — execute the join
-    val useNaturalKeyJoin = joinPairs.forall { case (l, r) => l == r }
+    val hasSameNamedKeys = keyPairs.forall { case (leftKey, rightKey) => leftKey == rightKey }
     var result =
-      if (useNaturalKeyJoin) {
+      if (hasSameNamedKeys) {
         prefixedLeft.join(prefixedRight, leftKeys, joinType.sparkValue)
       } else {
-        val condition = joinPairs
+        val condition = keyPairs
           .map { case (leftKey, rightKey) => prefixedLeft(leftKey) === prefixedRight(rightKey) }
           .reduce(_ && _)
         prefixedLeft.join(prefixedRight, condition, joinType.sparkValue)
@@ -304,7 +304,7 @@ object TransformJoin {
     println(s"  Join type    : ${joinType.sparkValue.toUpperCase}")
     val keyLabel =
       if (config.keyMappings.nonEmpty)
-        config.keyMappings.map { case (l, r) => s"$l=$r" }.mkString(", ")
+        config.keyMappings.map { case (leftKey, rightKey) => s"$leftKey=$rightKey" }.mkString(", ")
       else
         config.keyColumns.mkString(", ")
     println(s"  Key mapping  : $keyLabel")

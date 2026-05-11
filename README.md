@@ -18,7 +18,7 @@ Generic and reusable ETL pipeline with config-driven orchestration:
 
 All behavior is controlled from:
 
-- `/home/runner/work/Distributed-ETL-Pipeline/Distributed-ETL-Pipeline/application.conf`
+- `./application.conf`
 
 Main configuration sections:
 
@@ -40,7 +40,7 @@ sbt run
 
 Outputs are written under:
 
-- `/home/runner/work/Distributed-ETL-Pipeline/Distributed-ETL-Pipeline/output/final/`
+- `./output/final/`
 
 Each run writes separate subfolders per format (`parquet`, `csv`) to avoid overwriting.
 
@@ -48,7 +48,7 @@ Each run writes separate subfolders per format (`parquet`, `csv`) to avoid overw
 
 The repository includes Docker services in:
 
-- `/home/runner/work/Distributed-ETL-Pipeline/Distributed-ETL-Pipeline/docker/docker-compose.yml`
+- `./docker/docker-compose.yml`
 
 When DB services are unavailable, enabled DB extractions are skipped with warnings.
 

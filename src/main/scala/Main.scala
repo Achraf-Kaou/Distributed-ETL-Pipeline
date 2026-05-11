@@ -167,7 +167,7 @@ class EtlPipeline(spark: SparkSession, appConfig: AppConfig) {
         val projected = current.schema.fields.flatMap { field =>
           field.dataType match {
             case s: StructType =>
-              s.fieldNames.map(child => col(s"${field.name}.$child").as(s"${field.name}_$child"))
+              s.fieldNames.toSeq.map(child => col(s"${field.name}.$child").as(s"${field.name}_$child"))
             case _ =>
               Seq(col(field.name))
           }
@@ -269,7 +269,20 @@ class EtlPipeline(spark: SparkSession, appConfig: AppConfig) {
         case "flat" =>
           ExtractFlatFiles.read(spark, j.rightPathOrQuery)
         case "api" =>
-          ExtractApi.read(spark, j.rightPathOrQuery)
+          val fromNamedApi = appConfig.extract.apis.find(_.name == j.rightDbRef).filter(_.enabled)
+          fromNamedApi match {
+            case Some(apiCfg) =>
+              ExtractApi.read(
+                spark = spark,
+                url = apiCfg.url,
+                method = apiCfg.method,
+                params = apiCfg.params,
+                headers = apiCfg.headers,
+                rootField = apiCfg.rootField
+              )
+            case None =>
+              ExtractApi.read(spark, j.rightPathOrQuery)
+          }
         case "db" =>
           val dbCfg = appConfig.extract.databases.find(_.name == j.rightDbRef).getOrElse {
             throw new IllegalArgumentException(
