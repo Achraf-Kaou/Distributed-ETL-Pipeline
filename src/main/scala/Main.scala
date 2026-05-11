@@ -15,6 +15,7 @@ import transform.{TransformClean, TransformDeduplicate, TransformJoin, Transform
 object Main {
 
   def main(args: Array[String]): Unit = {
+    // Load config first because SparkSession settings (app name/master/partitions) come from it.
     val config = PipelineConfig.load()
 
     val spark = SparkSession.builder()

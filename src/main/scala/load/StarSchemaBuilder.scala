@@ -21,6 +21,10 @@ object StarSchemaBuilder {
     val employeeIdCol = choose(df.columns, Seq("email", "id"))
     val joinDateCol = choose(df.columns, Seq("join_date"))
 
+    if (departmentCol.isEmpty) println("[WARN] Star schema: missing department column, dim_department will be empty")
+    if (employeeIdCol.isEmpty) println("[WARN] Star schema: missing employee business key column, dim_employee will be empty")
+    if (joinDateCol.isEmpty) println("[WARN] Star schema: missing join_date column, dim_date will be empty")
+
     val dimDepartment = if (departmentCol.nonEmpty) {
       df.select(col(departmentCol).as("department_name"))
         .where(col("department_name").isNotNull)

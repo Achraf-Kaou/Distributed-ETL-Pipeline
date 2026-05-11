@@ -110,11 +110,11 @@ object WarehouseLoader {
     dbType match {
       case "postgres" | "postgresql" | "sqlite" =>
         val updates = nonKeyCols.map(c => s"$c=excluded.$c").mkString(",")
-        plainInsert +
+        plainInsert + " " +
           s"ON CONFLICT (${businessKeys.mkString(",")}) DO UPDATE SET $updates"
       case "mysql" =>
         val updates = nonKeyCols.map(c => s"$c=VALUES($c)").mkString(",")
-        plainInsert +
+        plainInsert + " " +
           s"ON DUPLICATE KEY UPDATE $updates"
       case other =>
         throw new IllegalArgumentException(s"Unsupported upsert db-type: $other")
