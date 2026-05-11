@@ -6,7 +6,8 @@ Generic and reusable ETL pipeline with config-driven orchestration:
 2. **Clean** data with configurable null handling, casting, and normalization
 3. **Deduplicate** with configurable business keys and source priority
 4. **Join** datasets with configurable key columns or key mappings
-5. **Load** into Parquet/CSV outputs
+5. **Build star schema** (`dim_department`, `dim_employee`, `dim_date`, `fact_employee_metrics`)
+6. **Load** into Parquet/CSV outputs and JDBC warehouse with config-driven upsert
 
 ## Stack
 
@@ -25,10 +26,15 @@ Main configuration sections:
 - `etl.extract.flat-files`: enable/disable and path-based flat-file ingestion
 - `etl.extract.apis`: list of API sources (enable per source)
 - `etl.extract.databases`: list of JDBC sources (Postgres/MySQL/SQLite)
+- `etl.spark`: appName/master/shuffle partitions
 - `etl.transform.clean`: cleaning rules
 - `etl.transform.deduplicate`: dedup keys/recency/source-priority
 - `etl.transform.joins`: join definitions with key mapping support
-- `etl.load`: enabled output formats
+- `etl.quality`: critical column checks, null-ratio threshold, duplicate-key checks
+- `etl.warehouse`: target star-schema table names and business keys
+- `etl.load`: output formats + JDBC target + upsert strategy
+- `etl.orchestration`: stage order + fail-fast behavior
+- `etl.logging`: log level and metrics toggle
 
 ## Running the pipeline
 
@@ -43,6 +49,8 @@ Outputs are written under:
 - `./output/final/`
 
 Each run writes separate subfolders per format (`parquet`, `csv`) to avoid overwriting.
+
+When `etl.load.warehouse-target.enabled=true`, dimension/fact tables are also upserted into the configured warehouse (SQLite/MySQL/Postgres) using staging tables and native SQL upsert.
 
 ## Docker DB sources
 
