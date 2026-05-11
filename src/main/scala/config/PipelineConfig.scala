@@ -58,7 +58,20 @@ object PipelineConfig {
     columnMapping: Map[String, String],
     clean: CleanConfig,
     deduplicate: DeduplicateConfig,
-    joins: Seq[JoinConfig]
+    joins: Seq[JoinConfig],
+    aggregation: AggregationConfig
+  )
+
+  case class AggregationConfig(
+    enabled: Boolean,
+    groupBy: Seq[String],
+    metrics: Seq[AggregationMetricConfig],
+    suffixEnabled: Boolean
+  )
+
+  case class AggregationMetricConfig(
+    column: String,
+    function: String
   )
 
   case class CleanConfig(
@@ -187,9 +200,23 @@ object PipelineConfig {
         dropSourceCol = getBooleanOrElse(dedup, "drop-source-col", true),
         verbose = getBooleanOrElse(dedup, "verbose", true)
       ),
-      joins = getConfigSeq(c, "joins").map(parseJoinConfig)
+      joins = getConfigSeq(c, "joins").map(parseJoinConfig),
+      aggregation = parseAggregation(c.getConfig("aggregation"))
     )
   }
+
+  private def parseAggregation(c: Config): AggregationConfig =
+    AggregationConfig(
+      enabled = c.getBoolean("enabled"),
+      groupBy = getStringSeq(c, "group-by"),
+      metrics = getConfigSeq(c, "metrics").map { metricCfg =>
+        AggregationMetricConfig(
+          column = metricCfg.getString("column"),
+          function = metricCfg.getString("function")
+        )
+      },
+      suffixEnabled = getBooleanOrElse(c, "suffix-enabled", true)
+    )
 
   private def parseJoinConfig(c: Config): JoinConfig =
     JoinConfig(

@@ -6,7 +6,7 @@ import java.io.File
 import config.PipelineConfig
 import config.PipelineConfig.{AppConfig, DatabaseSourceConfig}
 import extract.{ExtractApi, ExtractDatabase, ExtractFlatFiles}
-import transform.{TransformClean, TransformDeduplicate, TransformJoin}
+import transform.{TransformClean, TransformDeduplicate, TransformJoin, TransformAggregate}
 
 object Main {
 
@@ -60,8 +60,11 @@ class EtlPipeline(spark: SparkSession, appConfig: AppConfig) {
     // 4. Join
     val enrichedDF = applyConfiguredJoins(deduplicatedDF)
 
-    // 5. Save
-    appConfig.load.enabledFormats.foreach(fmt => save(enrichedDF, fmt))
+    // 5. Aggregate
+    val aggregatedDF = aggregate(enrichedDF)
+
+    // 6. Save
+    appConfig.load.enabledFormats.foreach(fmt => save(aggregatedDF, fmt))
 
     println("\n🎉 Full ETL Pipeline completed successfully!")
   }
@@ -308,6 +311,24 @@ class EtlPipeline(spark: SparkSession, appConfig: AppConfig) {
       )
       TransformJoin.join(leftDf, rightDf, joinConfig)
     }
+  }
+
+  private def aggregate(df: DataFrame): DataFrame = {
+    println("\n📊 Aggregation Phase - Department Level Metrics")
+
+    if (!appConfig.transform.aggregation.enabled) return df
+
+    val aggregationCfg = appConfig.transform.aggregation
+    val aggregationConfig = TransformAggregate.AggregationConfig(
+      enabled = aggregationCfg.enabled,
+      groupByColumns = aggregationCfg.groupBy,
+      metrics = aggregationCfg.metrics.map(metric =>
+        TransformAggregate.AggregationMetric(metric.column, metric.function)
+      ),
+      suffixEnabled = aggregationCfg.suffixEnabled
+    )
+
+    TransformAggregate.aggregate(df, aggregationConfig)
   }
 
   private def save(df: DataFrame, format: String = "parquet"): Unit = {
