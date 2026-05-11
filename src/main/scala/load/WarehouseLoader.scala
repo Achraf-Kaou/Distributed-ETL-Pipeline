@@ -174,7 +174,7 @@ object WarehouseLoader {
     )
     dbType match {
       case "mysql" => s"`$identifier`"
-      case _       => s""""$identifier""""
+      case _       => "\"" + identifier + "\""
     }
   }
 }
