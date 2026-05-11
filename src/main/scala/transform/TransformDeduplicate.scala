@@ -106,6 +106,7 @@ object TransformDeduplicate {
 
     require(config.keyColumns.nonEmpty,
       "DeduplicateConfig.keyColumns must not be empty — define your business key.")
+    validateColumns(df, config)
 
     val initialCount = df.count()
     if (config.verbose) printHeader(df, config, initialCount)
@@ -173,6 +174,24 @@ object TransformDeduplicate {
     if (config.verbose) printReport(initialCount, result.count(), config)
 
     result
+  }
+
+  private def validateColumns(df: DataFrame, config: DeduplicateConfig): Unit = {
+    val missingKeys = config.keyColumns.distinct.filterNot(df.columns.contains)
+    if (missingKeys.nonEmpty) {
+      throw new IllegalArgumentException(
+        s"Deduplication key column(s) missing: ${missingKeys.mkString(", ")}. " +
+        s"Available columns: ${df.columns.mkString(", ")}"
+      )
+    }
+
+    val missingRecency = config.recencyColumn.filterNot(df.columns.contains)
+    if (missingRecency.nonEmpty) {
+      throw new IllegalArgumentException(
+        s"Deduplication recency column '${missingRecency.get}' not found. " +
+        s"Available columns: ${df.columns.mkString(", ")}"
+      )
+    }
   }
 
   // ─────────────────────────────────────────────────────────────────

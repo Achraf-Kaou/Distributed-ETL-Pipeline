@@ -23,11 +23,24 @@ object ExtractApi {
     try {
 
       // Make the HTTP request
-      val response = requests.get(
-        url = url,
-        params = params,
-        headers = headers
-      )
+      val response = method.trim.toUpperCase match {
+        case "GET" =>
+          requests.get(
+            url = url,
+            params = params,
+            headers = headers
+          )
+        case "POST" =>
+          requests.post(
+            url = url,
+            params = params,
+            headers = headers
+          )
+        case unsupported =>
+          throw new IllegalArgumentException(
+            s"Unsupported API method '$unsupported'. Supported methods: GET, POST."
+          )
+      }
 
       // Check for successful response
       if (response.statusCode != 200) {

@@ -1,17 +1,17 @@
-import org.apache.spark.sql.{SparkSession, DataFrame}
+import org.apache.spark.sql.{DataFrame, SparkSession}
 import org.apache.spark.sql.functions.col
-import extract.ExtractFlatFiles
-import transform.{TransformClean, TransformDeduplicate, TransformJoin}
-import transform.TransformClean.CleanConfig
-import transform.TransformDeduplicate.DeduplicateConfig
-import transform.TransformJoin.JoinConfig
 import org.apache.spark.sql.types._
 import java.io.File
+
+import config.PipelineConfig
+import config.PipelineConfig.{AppConfig, DatabaseSourceConfig}
+import extract.{ExtractApi, ExtractDatabase, ExtractFlatFiles}
+import transform.{TransformClean, TransformDeduplicate, TransformJoin}
 
 object Main {
 
   def main(args: Array[String]): Unit = {
-    
+
     val spark = SparkSession.builder()
       .appName("Distributed ETL Pipeline")
       .master("local[*]")
@@ -19,7 +19,8 @@ object Main {
 
     spark.sparkContext.setLogLevel("ERROR")
 
-    val pipeline = new EtlPipeline(spark)
+    val config = PipelineConfig.load()
+    val pipeline = new EtlPipeline(spark, config)
     
     try {
       pipeline.run()
@@ -33,10 +34,9 @@ object Main {
   }
 }
 
-class EtlPipeline(spark: SparkSession) {
+class EtlPipeline(spark: SparkSession, appConfig: AppConfig) {
 
-  private val rawFolderPath = "data/raw"
-  private val outputBase    = "output"
+  private val outputBase = appConfig.load.outputBasePath
 
   def run(): Unit = {
     println("=" * 90)
@@ -57,120 +57,185 @@ class EtlPipeline(spark: SparkSession) {
     // 3. Deduplicate
     val deduplicatedDF = deduplicate(cleanedDF)
 
-    // 4. Join (Enrich with Departments)
-    val enrichedDF = joinWithDepartments(deduplicatedDF)
+    // 4. Join
+    val enrichedDF = applyConfiguredJoins(deduplicatedDF)
 
     // 5. Save
-    save(enrichedDF, "parquet")
-    save(enrichedDF, "csv")
+    appConfig.load.enabledFormats.foreach(fmt => save(enrichedDF, fmt))
 
     println("\n🎉 Full ETL Pipeline completed successfully!")
   }
 
-  /** Extract ALL files and union them with source tagging */
   private def extractAllSources(): DataFrame = {
     println("\n📥 Extraction Phase - Loading all sources")
 
-    val items = findItems(rawFolderPath)
-    if (items.isEmpty) return spark.emptyDataFrame
+    val extracted = extractFlatFiles() ++ extractApis() ++ extractDatabases()
+    extracted.reduceOption(_.unionByName(_, allowMissingColumns = true)).getOrElse(spark.emptyDataFrame)
+  }
 
-    val allDFs = items
-      .filterNot(_.getName.toLowerCase.contains("department"))  // Skip departments - joined separately
+  private def extractFlatFiles(): Seq[DataFrame] = {
+    if (!appConfig.extract.flatFiles.enabled) return Seq.empty
+
+    val items = findItems(appConfig.extract.flatFiles.path)
+    if (items.isEmpty) return Seq.empty
+
+    val excludes = appConfig.extract.flatFiles.excludeNameContains.map(_.toLowerCase)
+    items
+      .filterNot(item => excludes.exists(ex => item.getName.toLowerCase.contains(ex)))
       .map { item =>
-        println(s"   Loading: ${item.getName}")
-        
-        var df = ExtractFlatFiles.read(spark, item.getAbsolutePath)
-        
-        // Normalize column names (lowercase, replace spaces with underscores)
-        df = normalizeColumns(df)
-        
-        // Flatten JSON if it's nested
-        if (item.getName.toLowerCase.contains("json")) {
-          df = flattenJson(df)
+        println(s"   Loading flat file: ${item.getName}")
+        val raw = ExtractFlatFiles.read(spark, item.getAbsolutePath)
+        val prepared = normalizeAndMap(flattenStructs(raw))
+        val sourceTag = s"file_${extractExtension(item.getName)}"
+        TransformDeduplicate.tag(prepared, sourceTag)
+      }
+      .toSeq
+  }
+
+  private def extractApis(): Seq[DataFrame] = {
+    appConfig.extract.apis
+      .filter(_.enabled)
+      .flatMap { apiCfg =>
+        try {
+          println(s"   Loading API source: ${apiCfg.name}")
+          val raw = ExtractApi.read(
+            spark = spark,
+            url = apiCfg.url,
+            method = apiCfg.method,
+            params = apiCfg.params,
+            headers = apiCfg.headers,
+            rootField = apiCfg.rootField
+          )
+          val prepared = normalizeAndMap(flattenStructs(raw))
+          Some(TransformDeduplicate.tag(prepared, apiCfg.sourceTag))
+        } catch {
+          case e: Exception =>
+            println(s"⚠️ API source '${apiCfg.name}' skipped: ${e.getMessage}")
+            None
         }
-
-        // Tag source
-        TransformDeduplicate.tag(df, detectSourceType(item.getName))
       }
-
-    // Union all DataFrames with schema alignment
-    allDFs.reduceOption(_ unionByName _).getOrElse(spark.emptyDataFrame)
   }
 
-  /** Normalize column names to lowercase with underscores */
-  private def normalizeColumns(df: DataFrame): DataFrame = {
-    var result = df
-    for (colName <- df.columns) {
-      val normalizedName = colName.toLowerCase.replace(" ", "_").replace("-", "_")
-      if (colName != normalizedName) {
-        result = result.withColumnRenamed(colName, normalizedName)
+  private def extractDatabases(): Seq[DataFrame] = {
+    appConfig.extract.databases
+      .filter(_.enabled)
+      .flatMap { dbCfg =>
+        try {
+          println(s"   Loading DB source: ${dbCfg.name}")
+          val raw = readFromDbConfig(dbCfg, dbCfg.tableOrQuery)
+          val prepared = normalizeAndMap(flattenStructs(raw))
+          Some(TransformDeduplicate.tag(prepared, dbCfg.sourceTag))
+        } catch {
+          case e: Exception =>
+            println(s"⚠️ DB source '${dbCfg.name}' skipped: ${e.getMessage}")
+            None
+        }
       }
-    }
-    
-    // Handle semantic column mapping
-    val columnMapping = Map(
-      "dept" -> "department",
-      "startdate" -> "join_date",
-      "location" -> "city"
-    )
-    
-    for ((oldName, newName) <- columnMapping) {
-      if (result.columns.contains(oldName)) {
-        result = result.withColumnRenamed(oldName, newName)
-      }
-    }
-    
-    result
   }
 
-  /** Flatten nested JSON structure from complex JSON */
-  private def flattenJson(df: DataFrame): DataFrame = {
-    if (df.columns.contains("personal_info")) {
-      df
-        .select(
-          col("id"),
-          col("personal_info.full_name").as("full_name"),
-          col("personal_info.age").as("age"),
-          col("personal_info.email").as("email"),
-          col("employment.department").as("department"),
-          col("employment.salary").as("salary"),
-          col("employment.join_date").as("join_date"),
-          col("employment.status").as("status"),
-          col("address.city").as("city"),
-          col("address.country").as("country")
+  private def normalizeAndMap(df: DataFrame): DataFrame = {
+    val base =
+      if (appConfig.transform.normalizeColumns) {
+        df.columns.foldLeft(df) { (acc, c) =>
+          val normalized = TransformClean.toSnakeCase(c)
+          if (normalized == c) acc else acc.withColumnRenamed(c, normalized)
+        }
+      } else df
+
+    val normalizedMapping = appConfig.transform.columnMapping.map {
+      case (from, to) => TransformClean.toSnakeCase(from) -> TransformClean.toSnakeCase(to)
+    }
+
+    normalizedMapping.foldLeft(base) { case (acc, (from, to)) =>
+      if (acc.columns.contains(from) && from != to) acc.withColumnRenamed(from, to)
+      else acc
+    }
+  }
+
+  private def flattenStructs(df: DataFrame): DataFrame = {
+    var current = df
+    var hasStruct = true
+
+    while (hasStruct) {
+      val structFields = current.schema.fields.collect {
+        case f if f.dataType.isInstanceOf[StructType] => f.name
+      }
+
+      if (structFields.isEmpty) {
+        hasStruct = false
+      } else {
+        val projected = current.schema.fields.flatMap { field =>
+          field.dataType match {
+            case s: StructType =>
+              s.fieldNames.map(child => col(s"${field.name}.$child").as(s"${field.name}_$child"))
+            case _ =>
+              Seq(col(field.name))
+          }
+        }
+        current = current.select(projected: _*)
+      }
+    }
+
+    current
+  }
+
+  private def readFromDbConfig(dbCfg: DatabaseSourceConfig, tableOrQuery: String): DataFrame = {
+    val typedCfg = dbCfg.dbType.trim.toLowerCase match {
+      case "postgres" | "postgresql" =>
+        ExtractDatabase.PostgresConfig(
+          host = dbCfg.host,
+          port = if (dbCfg.port > 0) dbCfg.port else 5432,
+          database = dbCfg.database,
+          user = dbCfg.user,
+          password = dbCfg.password
         )
-    } else {
-      df
+      case "mysql" =>
+        ExtractDatabase.MySQLConfig(
+          host = dbCfg.host,
+          port = if (dbCfg.port > 0) dbCfg.port else 3306,
+          database = dbCfg.database,
+          user = dbCfg.user,
+          password = dbCfg.password
+        )
+      case "sqlite" =>
+        ExtractDatabase.SQLiteConfig(dbCfg.sqliteFilePath)
+      case other =>
+        throw new IllegalArgumentException(
+          s"Unsupported db-type '$other' for source '${dbCfg.name}'. Supported: postgres, mysql, sqlite."
+        )
     }
-  }
 
-  private def detectSourceType(filename: String): String = {
-    filename.toLowerCase match {
-      case f if f.contains("department") => "departments"
-      case f if f.contains("json")       => "api"
-      case _                             => "file"
+    (dbCfg.partitionColumn, dbCfg.lowerBound, dbCfg.upperBound) match {
+      case (Some(partitionCol), Some(lower), Some(upper)) =>
+        ExtractDatabase.readPartitioned(
+          spark = spark,
+          config = typedCfg,
+          table = tableOrQuery,
+          partitionColumn = partitionCol,
+          lowerBound = lower,
+          upperBound = upper,
+          numPartitions = dbCfg.numPartitions
+        )
+      case _ =>
+        ExtractDatabase.read(spark, typedCfg, tableOrQuery)
     }
   }
 
   private def clean(df: DataFrame): DataFrame = {
     println("\n🧹 Cleaning Phase")
-    
-    val cleanConfig = CleanConfig(
-      criticalColumns = Seq("id", "full_name", "email"),   // Use normalized names
-      fillValues = Map(
-        "country"    -> "Unknown",
-        "age"        -> "0",
-        "salary"     -> "0",
-        "department" -> "Unknown"
-      ),
-      stringColumns = Seq("full_name", "city", "country", "email", "department", "status"),
-      castColumns = Map(
-        "age"       -> IntegerType,
-        "salary"    -> DoubleType,
-        "join_date" -> DateType
-      ),
-      dropRowsWithNullsThreshold = 0.7,
-      verbose = true
+
+    if (!appConfig.transform.clean.enabled) return df
+
+    val cleanCfg = appConfig.transform.clean
+    val cleanConfig = TransformClean.CleanConfig(
+      criticalColumns = cleanCfg.criticalColumns,
+      fillValues = cleanCfg.fillValues,
+      castColumns = cleanCfg.castColumns.map { case (name, dt) => name -> parseDataType(dt) },
+      stringColumns = cleanCfg.stringColumns,
+      normalizeColNames = cleanCfg.normalizeColNames,
+      dropFullDuplicates = cleanCfg.dropFullDuplicates,
+      dropRowsWithNullsThreshold = cleanCfg.dropRowsWithNullsThreshold,
+      verbose = cleanCfg.verbose
     )
 
     TransformClean.clean(df, cleanConfig)
@@ -179,48 +244,62 @@ class EtlPipeline(spark: SparkSession) {
   private def deduplicate(df: DataFrame): DataFrame = {
     println("\n🔁 Deduplication Phase")
 
-    if (!df.columns.contains("email")) {
-      println("⚠️ Skipping deduplication (no 'email' column)")
-      return df
-    }
+    if (!appConfig.transform.deduplicate.enabled) return df
 
-    val dedupConfig = DeduplicateConfig(
-      keyColumns     = Seq("email"),
-      recencyColumn  = Some("join_date"),
-      sourcePriority = Map("file" -> 1, "api" -> 2, "departments" -> 3),
-      sourceTag      = None,   // already tagged during extraction
-      dropSourceCol  = true,
-      verbose        = true
+    val dedupCfg = appConfig.transform.deduplicate
+    val dedupConfig = TransformDeduplicate.DeduplicateConfig(
+      keyColumns = dedupCfg.keyColumns,
+      recencyColumn = dedupCfg.recencyColumn,
+      sourcePriority = dedupCfg.sourcePriority,
+      sourceTag = None,
+      dropSourceCol = dedupCfg.dropSourceCol,
+      verbose = dedupCfg.verbose
     )
 
     TransformDeduplicate.deduplicate(df, dedupConfig)
   }
 
-  /** Join enriched example: Employees + Departments */
-  private def joinWithDepartments(df: DataFrame): DataFrame = {
-    println("\n🔗 Join Phase - Enriching with Departments")
+  private def applyConfiguredJoins(df: DataFrame): DataFrame = {
+    val activeJoins = appConfig.transform.joins.filter(_.enabled)
+    if (activeJoins.isEmpty) return df
 
-    val departmentsPath = s"$rawFolderPath/departments.csv"
-    val departmentsDF = ExtractFlatFiles.read(spark, departmentsPath)
+    activeJoins.foldLeft(df) { (leftDf, j) =>
+      println(s"\n🔗 Join Phase - ${j.name}")
+      val rightRaw = j.rightSourceType.trim.toLowerCase match {
+        case "flat" =>
+          ExtractFlatFiles.read(spark, j.rightPathOrQuery)
+        case "api" =>
+          ExtractApi.read(spark, j.rightPathOrQuery)
+        case "db" =>
+          val dbCfg = appConfig.extract.databases.find(_.name == j.rightDbRef).getOrElse {
+            throw new IllegalArgumentException(
+              s"Join '${j.name}' references unknown database source '${j.rightDbRef}'."
+            )
+          }
+          readFromDbConfig(dbCfg, j.rightPathOrQuery)
+        case other =>
+          throw new IllegalArgumentException(
+            s"Join '${j.name}' has unsupported right-source-type '$other'. Supported: flat, api, db."
+          )
+      }
 
-    val joinConfig = JoinConfig(
-      joinType      = "left",
-      keyColumns    = Seq("department"),
-      selectColumns = Seq(
-        "id", "full_name", "age", "email", "salary", "join_date", "status",
-        "department", "dept_name", "manager", "location", "budget"
-      ),
-      leftPrefix    = "",
-      rightPrefix   = "dept_",
-      verbose       = true
-    )
-
-    TransformJoin.join(df, departmentsDF, joinConfig)
+      val rightDf = normalizeAndMap(flattenStructs(rightRaw))
+      val joinConfig = TransformJoin.JoinConfig(
+        joinType = j.joinType,
+        keyColumns = j.keyColumns,
+        keyMappings = j.keyMappings,
+        selectColumns = j.selectColumns,
+        leftPrefix = j.leftPrefix,
+        rightPrefix = j.rightPrefix,
+        verbose = j.verbose
+      )
+      TransformJoin.join(leftDf, rightDf, joinConfig)
+    }
   }
 
   private def save(df: DataFrame, format: String = "parquet"): Unit = {
     val timestamp = System.currentTimeMillis()
-    val path = s"$outputBase/final/${timestamp}_final"
+    val path = s"$outputBase/final/${timestamp}_final/$format"
 
     format.toLowerCase match {
       case "csv" =>
@@ -233,6 +312,29 @@ class EtlPipeline(spark: SparkSession) {
     }
 
     println(s"💾 Saved as $format → $path (${df.count()} rows)")
+  }
+
+  private def parseDataType(name: String): DataType = {
+    name.trim.toLowerCase match {
+      case "string"     => StringType
+      case "int" | "integer" => IntegerType
+      case "long"       => LongType
+      case "double"     => DoubleType
+      case "float"      => FloatType
+      case "date"       => DateType
+      case "timestamp"  => TimestampType
+      case "boolean"    => BooleanType
+      case other =>
+        throw new IllegalArgumentException(
+          s"Unsupported cast type '$other'. Supported: string,int,long,double,float,date,timestamp,boolean."
+        )
+    }
+  }
+
+  private def extractExtension(filename: String): String = {
+    val idx = filename.lastIndexOf('.')
+    if (idx < 0 || idx == filename.length - 1) "unknown"
+    else filename.substring(idx + 1).toLowerCase
   }
 
   private def findItems(folderPath: String): Array[File] = {

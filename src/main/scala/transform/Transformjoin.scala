@@ -97,6 +97,7 @@ object TransformJoin {
   case class JoinConfig(
     joinType:      String,
     keyColumns:    Seq[String],
+    keyMappings:   Seq[(String, String)] = Seq.empty,
     selectColumns: Seq[String]  = Seq.empty,
     leftPrefix:    String       = "",
     rightPrefix:   String       = "",
@@ -128,26 +129,37 @@ object TransformJoin {
     config: JoinConfig
   ): DataFrame = {
 
-    require(config.keyColumns.nonEmpty,
-      "JoinConfig.keyColumns must not be empty.")
+    require(
+      config.keyColumns.nonEmpty || config.keyMappings.nonEmpty,
+      "JoinConfig must define either keyColumns or keyMappings."
+    )
 
     val joinType = JoinType.fromString(config.joinType)
+    val joinPairs = if (config.keyMappings.nonEmpty) config.keyMappings else config.keyColumns.map(k => k -> k)
+    val leftKeys = joinPairs.map(_._1)
+    val rightKeys = joinPairs.map(_._2)
 
     // Step 1 — validate keys exist on both sides (fail fast)
-    validateKeys(left, right, config.keyColumns)
+    validateKeys(left, right, joinPairs)
 
     if (config.verbose) printHeader(left, right, config, joinType)
 
     // Step 2 — apply prefixes to non-key columns to avoid conflicts
     val (prefixedLeft, prefixedRight) = applyPrefixes(
-      left, right, config.keyColumns, config.leftPrefix, config.rightPrefix
+      left, right, leftKeys, rightKeys, config.leftPrefix, config.rightPrefix
     )
 
     // Step 3 — execute the join
-    // Joining on Seq[String] (not a Column expression) ensures key columns
-    // appear only ONCE in the output — Spark's built-in deduplication for
-    // equi-joins on named columns.
-    var result = prefixedLeft.join(prefixedRight, config.keyColumns, joinType.sparkValue)
+    val useNaturalKeyJoin = joinPairs.forall { case (l, r) => l == r }
+    var result =
+      if (useNaturalKeyJoin) {
+        prefixedLeft.join(prefixedRight, leftKeys, joinType.sparkValue)
+      } else {
+        val condition = joinPairs
+          .map { case (leftKey, rightKey) => prefixedLeft(leftKey) === prefixedRight(rightKey) }
+          .reduce(_ && _)
+        prefixedLeft.join(prefixedRight, condition, joinType.sparkValue)
+      }
 
     // Step 4 — select output columns
     if (config.selectColumns.nonEmpty) {
@@ -225,22 +237,23 @@ object TransformJoin {
   private def applyPrefixes(
     left:       DataFrame,
     right:      DataFrame,
-    keyColumns: Seq[String],
+    leftKeys: Seq[String],
+    rightKeys: Seq[String],
     leftPrefix:  String,
     rightPrefix: String
   ): (DataFrame, DataFrame) = {
 
-    def addPrefix(df: DataFrame, prefix: String): DataFrame = {
+    def addPrefix(df: DataFrame, prefix: String, keys: Seq[String]): DataFrame = {
       if (prefix.isEmpty) df
       else {
         df.columns.foldLeft(df) { (accDf, colName) =>
-          if (keyColumns.contains(colName)) accDf  // never rename key columns
+          if (keys.contains(colName)) accDf  // never rename key columns
           else accDf.withColumnRenamed(colName, s"$prefix$colName")
         }
       }
     }
 
-    (addPrefix(left, leftPrefix), addPrefix(right, rightPrefix))
+    (addPrefix(left, leftPrefix, leftKeys), addPrefix(right, rightPrefix, rightKeys))
   }
 
   // ─────────────────────────────────────────────────────────────────
@@ -257,10 +270,10 @@ object TransformJoin {
   private def validateKeys(
     left:       DataFrame,
     right:      DataFrame,
-    keyColumns: Seq[String]
+    keyPairs: Seq[(String, String)]
   ): Unit = {
-    val missingLeft  = keyColumns.filterNot(left.columns.contains)
-    val missingRight = keyColumns.filterNot(right.columns.contains)
+    val missingLeft  = keyPairs.map(_._1).distinct.filterNot(left.columns.contains)
+    val missingRight = keyPairs.map(_._2).distinct.filterNot(right.columns.contains)
 
     if (missingLeft.nonEmpty)
       throw new IllegalArgumentException(
@@ -289,7 +302,12 @@ object TransformJoin {
     println(s"  🔗 TransformJoin — starting")
     println(s"${"=" * 70}")
     println(s"  Join type    : ${joinType.sparkValue.toUpperCase}")
-    println(s"  Key columns  : ${config.keyColumns.mkString(", ")}")
+    val keyLabel =
+      if (config.keyMappings.nonEmpty)
+        config.keyMappings.map { case (l, r) => s"$l=$r" }.mkString(", ")
+      else
+        config.keyColumns.mkString(", ")
+    println(s"  Key mapping  : $keyLabel")
     println(s"  Left  cols   : ${left.columns.mkString(", ")}")
     println(s"  Right cols   : ${right.columns.mkString(", ")}")
     println(s"  Left  rows   : ${left.count()}")
