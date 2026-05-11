@@ -7,9 +7,50 @@ import java.io.File
 object PipelineConfig {
 
   case class AppConfig(
+    spark: SparkConfig,
     extract: ExtractConfig,
     transform: TransformConfig,
-    load: LoadConfig
+    quality: QualityConfig,
+    warehouse: WarehouseConfig,
+    load: LoadConfig,
+    orchestration: OrchestrationConfig,
+    logging: LoggingConfig
+  )
+
+  case class SparkConfig(
+    appName: String,
+    master: String,
+    shufflePartitions: Int
+  )
+
+  case class QualityConfig(
+    enabled: Boolean,
+    criticalColumns: Seq[String],
+    maxNullRatioPerRow: Double,
+    deduplicationKeys: Seq[String]
+  )
+
+  case class WarehouseConfig(
+    enabled: Boolean,
+    dimensions: Seq[WarehouseTableConfig],
+    fact: WarehouseTableConfig
+  )
+
+  case class WarehouseTableConfig(
+    name: String,
+    surrogateKey: String,
+    businessKeys: Seq[String]
+  )
+
+  case class OrchestrationConfig(
+    stages: Seq[String],
+    failFast: Boolean,
+    skipNonCriticalSourceFailures: Boolean
+  )
+
+  case class LoggingConfig(
+    level: String,
+    metricsEnabled: Boolean
   )
 
   case class ExtractConfig(
@@ -112,7 +153,27 @@ object PipelineConfig {
 
   case class LoadConfig(
     enabledFormats: Seq[String],
-    outputBasePath: String
+    outputBasePath: String,
+    warehouseTarget: WarehouseTargetConfig,
+    upsert: UpsertConfig
+  )
+
+  case class WarehouseTargetConfig(
+    enabled: Boolean,
+    dbType: String,
+    host: String,
+    port: Int,
+    database: String,
+    user: String,
+    password: String,
+    sqliteFilePath: String,
+    schema: String
+  )
+
+  case class UpsertConfig(
+    enabled: Boolean,
+    stagingPrefix: String,
+    batchSize: Int
   )
 
   def load(configPath: String = "application.conf"): AppConfig = {
@@ -125,9 +186,23 @@ object PipelineConfig {
     val root = rootConfig.getConfig("etl")
 
     AppConfig(
+      spark = parseSpark(root),
       extract = parseExtract(root.getConfig("extract")),
       transform = parseTransform(root.getConfig("transform")),
-      load = parseLoad(root.getConfig("load"))
+      quality = parseQuality(getConfigOrElse(root, "quality", ConfigFactory.parseString(""))),
+      warehouse = parseWarehouse(getConfigOrElse(root, "warehouse", ConfigFactory.parseString(""))),
+      load = parseLoad(root.getConfig("load")),
+      orchestration = parseOrchestration(getConfigOrElse(root, "orchestration", ConfigFactory.parseString(""))),
+      logging = parseLogging(getConfigOrElse(root, "logging", ConfigFactory.parseString("")))
+    )
+  }
+
+  private def parseSpark(c: Config): SparkConfig = {
+    val spark = getConfigOrElse(c, "spark", ConfigFactory.parseString(""))
+    SparkConfig(
+      appName = getStringOrElse(spark, "app-name", "Distributed ETL Pipeline"),
+      master = getStringOrElse(spark, "master", "local[*]"),
+      shufflePartitions = getIntOrElse(spark, "shuffle-partitions", 8)
     )
   }
 
@@ -258,7 +333,70 @@ object PipelineConfig {
   private def parseLoad(c: Config): LoadConfig =
     LoadConfig(
       enabledFormats = getStringSeq(c, "enabled-formats"),
-      outputBasePath = c.getString("output-base-path")
+      outputBasePath = c.getString("output-base-path"),
+      warehouseTarget = parseWarehouseTarget(getConfigOrElse(c, "warehouse-target", ConfigFactory.parseString(""))),
+      upsert = parseUpsert(getConfigOrElse(c, "upsert", ConfigFactory.parseString("")))
+    )
+
+  private def parseWarehouseTarget(c: Config): WarehouseTargetConfig =
+    WarehouseTargetConfig(
+      enabled = getBooleanOrElse(c, "enabled", false),
+      dbType = getStringOrElse(c, "db-type", "sqlite"),
+      host = getStringOrElse(c, "host", "localhost"),
+      port = getIntOrElse(c, "port", 0),
+      database = getStringOrElse(c, "database", ""),
+      user = getStringOrElse(c, "user", ""),
+      password = getStringOrElse(c, "password", ""),
+      sqliteFilePath = getStringOrElse(c, "sqlite-file-path", ""),
+      schema = getStringOrElse(c, "schema", "public")
+    )
+
+  private def parseUpsert(c: Config): UpsertConfig =
+    UpsertConfig(
+      enabled = getBooleanOrElse(c, "enabled", false),
+      stagingPrefix = getStringOrElse(c, "staging-prefix", "stg_"),
+      batchSize = getIntOrElse(c, "batch-size", 500)
+    )
+
+  private def parseQuality(c: Config): QualityConfig =
+    QualityConfig(
+      enabled = getBooleanOrElse(c, "enabled", false),
+      criticalColumns = getStringSeq(c, "critical-columns"),
+      maxNullRatioPerRow = getDoubleOrElse(c, "max-null-ratio-per-row", 1.0),
+      deduplicationKeys = getStringSeq(c, "deduplication-keys")
+    )
+
+  private def parseWarehouse(c: Config): WarehouseConfig = {
+    val defaultFact = WarehouseTableConfig(
+      name = "fact_employee_metrics",
+      surrogateKey = "fact_id",
+      businessKeys = Seq("employee_sk", "department_sk", "date_sk")
+    )
+    WarehouseConfig(
+      enabled = getBooleanOrElse(c, "enabled", false),
+      dimensions = getConfigSeq(c, "dimensions").map(parseWarehouseTable),
+      fact = if (c.hasPath("fact")) parseWarehouseTable(c.getConfig("fact")) else defaultFact
+    )
+  }
+
+  private def parseWarehouseTable(c: Config): WarehouseTableConfig =
+    WarehouseTableConfig(
+      name = c.getString("name"),
+      surrogateKey = getStringOrElse(c, "surrogate-key", "id"),
+      businessKeys = getStringSeq(c, "business-keys")
+    )
+
+  private def parseOrchestration(c: Config): OrchestrationConfig =
+    OrchestrationConfig(
+      stages = getStringSeq(c, "stages"),
+      failFast = getBooleanOrElse(c, "fail-fast", true),
+      skipNonCriticalSourceFailures = getBooleanOrElse(c, "skip-non-critical-source-failures", true)
+    )
+
+  private def parseLogging(c: Config): LoggingConfig =
+    LoggingConfig(
+      level = getStringOrElse(c, "level", "INFO"),
+      metricsEnabled = getBooleanOrElse(c, "metrics-enabled", true)
     )
 
   private def getStringSeq(c: Config, key: String): Seq[String] =
@@ -287,6 +425,9 @@ object PipelineConfig {
 
   private def getStringOrElse(c: Config, key: String, default: String): String =
     if (c.hasPath(key)) c.getString(key) else default
+
+  private def getConfigOrElse(c: Config, key: String, default: Config): Config =
+    if (c.hasPath(key)) c.getConfig(key) else default
 
   private def getOptString(c: Config, key: String): Option[String] =
     if (c.hasPath(key)) Option(c.getString(key)).filter(_.nonEmpty) else None

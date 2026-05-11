@@ -6,20 +6,25 @@ import java.io.File
 import config.PipelineConfig
 import config.PipelineConfig.{AppConfig, DatabaseSourceConfig}
 import extract.{ExtractApi, ExtractDatabase, ExtractFlatFiles}
+import load.{StarSchemaBuilder, WarehouseLoader}
+import logging.PipelineLogger
+import orchestration.PipelineOrchestrator
+import transform.QualityChecks
 import transform.{TransformClean, TransformDeduplicate, TransformJoin, TransformAggregate}
 
 object Main {
 
   def main(args: Array[String]): Unit = {
+    val config = PipelineConfig.load()
 
     val spark = SparkSession.builder()
-      .appName("Distributed ETL Pipeline")
-      .master("local[*]")
+      .appName(config.spark.appName)
+      .master(config.spark.master)
+      .config("spark.sql.shuffle.partitions", config.spark.shufflePartitions.toString)
       .getOrCreate()
 
     spark.sparkContext.setLogLevel("ERROR")
 
-    val config = PipelineConfig.load()
     val pipeline = new EtlPipeline(spark, config)
     
     try {
@@ -37,36 +42,47 @@ object Main {
 class EtlPipeline(spark: SparkSession, appConfig: AppConfig) {
 
   private val outputBase = appConfig.load.outputBasePath
+  private val logger = new PipelineLogger(appConfig.logging.level, appConfig.logging.metricsEnabled)
+  private val orchestrator = new PipelineOrchestrator(
+    appConfig.orchestration.stages,
+    appConfig.orchestration.failFast,
+    logger
+  )
 
   def run(): Unit = {
-    println("=" * 90)
-    println("🚀 Starting Distributed ETL Pipeline")
-    println("=" * 90)
+    logger.info("=" * 90)
+    logger.info("Starting Distributed ETL Pipeline")
+    logger.info("=" * 90)
 
-    // 1. Extract from ALL sources
-    val rawDF = extractAllSources()
+    val rawDF = orchestrator.runStage("extract") { extractAllSources() }.getOrElse(spark.emptyDataFrame)
 
     if (rawDF.isEmpty) {
-      println("⚠️ No data extracted. Exiting.")
+      logger.warn("No data extracted. Exiting.")
       return
     }
 
-    // 2. Clean
-    val cleanedDF = clean(rawDF)
+    val cleanedDF = orchestrator.runStage("clean") { clean(rawDF) }.getOrElse(rawDF)
+    runQualityChecks(cleanedDF, "clean")
 
-    // 3. Deduplicate
-    val deduplicatedDF = deduplicate(cleanedDF)
+    val deduplicatedDF = orchestrator.runStage("dedup") { deduplicate(cleanedDF) }.getOrElse(cleanedDF)
+    runQualityChecks(deduplicatedDF, "dedup")
 
-    // 4. Join
-    val enrichedDF = applyConfiguredJoins(deduplicatedDF)
+    val enrichedDF = orchestrator.runStage("join") { applyConfiguredJoins(deduplicatedDF) }.getOrElse(deduplicatedDF)
 
-    // 5. Aggregate
-    val aggregatedDF = aggregate(enrichedDF)
+    val aggregatedDF = orchestrator.runStage("aggregate") { aggregate(enrichedDF) }.getOrElse(enrichedDF)
 
-    // 6. Save
-    appConfig.load.enabledFormats.foreach(fmt => save(aggregatedDF, fmt))
+    val starSchema = orchestrator.runStage("build_star") {
+      StarSchemaBuilder.build(spark, enrichedDF, appConfig.warehouse)
+    }
 
-    println("\n🎉 Full ETL Pipeline completed successfully!")
+    orchestrator.runStage("load") {
+      appConfig.load.enabledFormats.foreach(fmt => save(aggregatedDF, fmt))
+      starSchema.foreach { star =>
+        WarehouseLoader.loadStarSchema(star, appConfig.warehouse, appConfig.load.warehouseTarget, appConfig.load.upsert)
+      }
+    }
+
+    logger.info("Full ETL Pipeline completed successfully.")
   }
 
   private def extractAllSources(): DataFrame = {
@@ -100,7 +116,7 @@ class EtlPipeline(spark: SparkSession, appConfig: AppConfig) {
       .filter(_.enabled)
       .flatMap { apiCfg =>
         try {
-          println(s"   Loading API source: ${apiCfg.name}")
+          logger.info(s"Loading API source: ${apiCfg.name}")
           val raw = ExtractApi.read(
             spark = spark,
             url = apiCfg.url,
@@ -113,7 +129,7 @@ class EtlPipeline(spark: SparkSession, appConfig: AppConfig) {
           Some(TransformDeduplicate.tag(prepared, apiCfg.sourceTag))
         } catch {
           case e: Exception =>
-            println(s"⚠️ API source '${apiCfg.name}' skipped: ${e.getMessage}")
+            logger.warn(s"API source '${apiCfg.name}' skipped: ${e.getMessage}")
             None
         }
       }
@@ -124,13 +140,13 @@ class EtlPipeline(spark: SparkSession, appConfig: AppConfig) {
       .filter(_.enabled)
       .flatMap { dbCfg =>
         try {
-          println(s"   Loading DB source: ${dbCfg.name}")
+          logger.info(s"Loading DB source: ${dbCfg.name}")
           val raw = readFromDbConfig(dbCfg, dbCfg.tableOrQuery)
           val prepared = normalizeAndMap(flattenStructs(raw))
           Some(TransformDeduplicate.tag(prepared, dbCfg.sourceTag))
         } catch {
           case e: Exception =>
-            println(s"⚠️ DB source '${dbCfg.name}' skipped: ${e.getMessage}")
+            logger.warn(s"DB source '${dbCfg.name}' skipped: ${e.getMessage}")
             None
         }
       }
@@ -225,7 +241,7 @@ class EtlPipeline(spark: SparkSession, appConfig: AppConfig) {
   }
 
   private def clean(df: DataFrame): DataFrame = {
-    println("\n🧹 Cleaning Phase")
+    logger.info("Cleaning phase")
 
     if (!appConfig.transform.clean.enabled) return df
 
@@ -245,7 +261,7 @@ class EtlPipeline(spark: SparkSession, appConfig: AppConfig) {
   }
 
   private def deduplicate(df: DataFrame): DataFrame = {
-    println("\n🔁 Deduplication Phase")
+    logger.info("Deduplication phase")
 
     if (!appConfig.transform.deduplicate.enabled) return df
 
@@ -267,7 +283,7 @@ class EtlPipeline(spark: SparkSession, appConfig: AppConfig) {
     if (activeJoins.isEmpty) return df
 
     activeJoins.foldLeft(df) { (leftDf, j) =>
-      println(s"\n🔗 Join Phase - ${j.name}")
+      logger.info(s"Join phase - ${j.name}")
       val rightRaw = j.rightSourceType.trim.toLowerCase match {
         case "flat" =>
           ExtractFlatFiles.read(spark, j.rightPathOrQuery)
@@ -314,7 +330,7 @@ class EtlPipeline(spark: SparkSession, appConfig: AppConfig) {
   }
 
   private def aggregate(df: DataFrame): DataFrame = {
-    println("\n📊 Aggregation Phase - Department Level Metrics")
+    logger.info("Aggregation phase")
 
     if (!appConfig.transform.aggregation.enabled) return df
 
@@ -345,7 +361,7 @@ class EtlPipeline(spark: SparkSession, appConfig: AppConfig) {
         df.write.mode("overwrite").parquet(path)
     }
 
-    println(s"💾 Saved as $format → $path (${df.count()} rows)")
+    logger.info(s"Saved as $format -> $path (${df.count()} rows)")
   }
 
   private def parseDataType(name: String): DataType = {
@@ -382,5 +398,21 @@ class EtlPipeline(spark: SparkSession, appConfig: AppConfig) {
       .filter(f => f.isFile || (f.isDirectory && f.getName.endsWith(".parquet")))
       .filter(f => !f.getName.startsWith(".") && !f.getName.startsWith("_"))
       .sortBy(_.getName)
+  }
+
+  private def runQualityChecks(df: DataFrame, stage: String): Unit = {
+    val cfg = QualityChecks.QualityConfig(
+      enabled = appConfig.quality.enabled,
+      criticalColumns = appConfig.quality.criticalColumns,
+      maxNullRatioPerRow = appConfig.quality.maxNullRatioPerRow,
+      deduplicationKeys = appConfig.quality.deduplicationKeys
+    )
+    val issues = QualityChecks.validate(df, cfg)
+    if (issues.nonEmpty) {
+      logger.warn(s"Quality checks found issues at stage '$stage': ${issues.mkString(", ")}")
+      if (appConfig.orchestration.failFast) {
+        throw new IllegalStateException(s"Quality check failed at stage '$stage'")
+      }
+    }
   }
 }
