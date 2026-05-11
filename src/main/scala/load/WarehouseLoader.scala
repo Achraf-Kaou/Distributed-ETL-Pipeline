@@ -26,7 +26,7 @@ object WarehouseLoader {
 
     warehouseConfig.dimensions.foreach { t =>
       dimensionsByName.get(t.name).foreach { df =>
-        upsertDataFrame(df, t.name, t.businessKeys, url, driver, props, db, upsertConfig.stagingPrefix)
+        upsertDataFrame(df, t.name, t.businessKeys, url, driver, props, db, upsertConfig.stagingPrefix, upsertConfig.batchSize)
       }
     }
 
@@ -38,7 +38,8 @@ object WarehouseLoader {
       driver,
       props,
       db,
-      upsertConfig.stagingPrefix
+      upsertConfig.stagingPrefix,
+      upsertConfig.batchSize
     )
   }
 
@@ -50,7 +51,8 @@ object WarehouseLoader {
     driver: String,
     props: java.util.Properties,
     dbType: String,
-    stagingPrefix: String
+    stagingPrefix: String,
+    batchSize: Int = 500
   ): Unit = {
     if (df.isEmpty) return
     val stagingTable = s"$stagingPrefix$targetTable"
@@ -58,6 +60,7 @@ object WarehouseLoader {
       .option("url", jdbcUrl)
       .option("dbtable", stagingTable)
       .option("driver", driver)
+      .option("batchsize", batchSize)
       .options(propsToMap(props))
       .save()
 
@@ -100,15 +103,18 @@ object WarehouseLoader {
     val colList = columns.mkString(",")
     val selectList = columns.mkString(",")
     val nonKeyCols = columns.filterNot(c => businessKeys.contains(c))
+    val plainInsert = s"INSERT INTO $targetTable ($colList) SELECT $selectList FROM $stagingTable"
+
+    if (businessKeys.isEmpty) return plainInsert
 
     dbType match {
       case "postgres" | "postgresql" | "sqlite" =>
         val updates = nonKeyCols.map(c => s"$c=excluded.$c").mkString(",")
-        s"INSERT INTO $targetTable ($colList) SELECT $selectList FROM $stagingTable " +
+        plainInsert +
           s"ON CONFLICT (${businessKeys.mkString(",")}) DO UPDATE SET $updates"
       case "mysql" =>
         val updates = nonKeyCols.map(c => s"$c=VALUES($c)").mkString(",")
-        s"INSERT INTO $targetTable ($colList) SELECT $selectList FROM $stagingTable " +
+        plainInsert +
           s"ON DUPLICATE KEY UPDATE $updates"
       case other =>
         throw new IllegalArgumentException(s"Unsupported upsert db-type: $other")

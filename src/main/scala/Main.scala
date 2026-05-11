@@ -129,8 +129,12 @@ class EtlPipeline(spark: SparkSession, appConfig: AppConfig) {
           Some(TransformDeduplicate.tag(prepared, apiCfg.sourceTag))
         } catch {
           case e: Exception =>
-            logger.warn(s"API source '${apiCfg.name}' skipped: ${e.getMessage}")
-            None
+            if (appConfig.orchestration.skipNonCriticalSourceFailures) {
+              logger.warn(s"API source '${apiCfg.name}' skipped: ${e.getMessage}")
+              None
+            } else {
+              throw e
+            }
         }
       }
   }
@@ -146,8 +150,12 @@ class EtlPipeline(spark: SparkSession, appConfig: AppConfig) {
           Some(TransformDeduplicate.tag(prepared, dbCfg.sourceTag))
         } catch {
           case e: Exception =>
-            logger.warn(s"DB source '${dbCfg.name}' skipped: ${e.getMessage}")
-            None
+            if (appConfig.orchestration.skipNonCriticalSourceFailures) {
+              logger.warn(s"DB source '${dbCfg.name}' skipped: ${e.getMessage}")
+              None
+            } else {
+              throw e
+            }
         }
       }
   }
