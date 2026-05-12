@@ -43,7 +43,7 @@ object Main {
 class EtlPipeline(spark: SparkSession, appConfig: AppConfig) {
 
   private val outputBase = appConfig.load.outputBasePath
-  private val logger = new PipelineLogger(appConfig.logging.level, appConfig.logging.metricsEnabled)
+  private val logger = new PipelineLogger(appConfig.logging.metricsEnabled)
   private val orchestrator = new PipelineOrchestrator(
     appConfig.orchestration.stages,
     appConfig.orchestration.failFast,
@@ -410,15 +410,17 @@ class EtlPipeline(spark: SparkSession, appConfig: AppConfig) {
   }
 
   private def runQualityChecks(df: DataFrame, stage: String): Unit = {
+    val dedupKeys = if (stage == "clean") Seq.empty else appConfig.quality.deduplicationKeys.map(TransformClean.toSnakeCase)
     val cfg = QualityChecks.QualityConfig(
       enabled = appConfig.quality.enabled,
-      criticalColumns = appConfig.quality.criticalColumns,
+      criticalColumns = appConfig.quality.criticalColumns.map(TransformClean.toSnakeCase),
       maxNullRatioPerRow = appConfig.quality.maxNullRatioPerRow,
-      deduplicationKeys = appConfig.quality.deduplicationKeys
+      deduplicationKeys = dedupKeys
     )
     val issues = QualityChecks.validate(df, cfg)
     if (issues.nonEmpty) {
       logger.warn(s"Quality checks found issues at stage '$stage': ${issues.mkString(", ")}")
+      println(s"Quality checks details: ${issues.mkString(", ")}")
       if (appConfig.orchestration.failFast) {
         throw new IllegalStateException(s"Quality check failed at stage '$stage'")
       }

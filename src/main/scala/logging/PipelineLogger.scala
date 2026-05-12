@@ -1,19 +1,20 @@
 package logging
 
+import org.slf4j.LoggerFactory
 import scala.collection.mutable
 
-class PipelineLogger(level: String = "INFO", metricsEnabled: Boolean = true) {
+class PipelineLogger(metricsEnabled: Boolean = true) {
+  private val logger = LoggerFactory.getLogger("ETL.Pipeline")
   private val stepStart = mutable.Map.empty[String, Long]
 
   private def now: Long = System.currentTimeMillis()
-  private def allowed(target: String): Boolean = {
-    val order = Map("ERROR" -> 1, "WARN" -> 2, "INFO" -> 3, "DEBUG" -> 4)
-    order.getOrElse(level.toUpperCase, 3) >= order.getOrElse(target.toUpperCase, 3)
-  }
 
-  def info(message: String): Unit = if (allowed("INFO")) println(s"[INFO] $message")
-  def warn(message: String): Unit = if (allowed("WARN")) println(s"[WARN] $message")
-  def error(message: String): Unit = if (allowed("ERROR")) println(s"[ERROR] $message")
+  def info(message: String): Unit = logger.info(message)
+  def warn(message: String): Unit = logger.warn(message)
+  def error(message: String, throwable: Throwable = null): Unit = {
+    if (throwable != null) logger.error(message, throwable)
+    else logger.error(message)
+  }
 
   def stepStartLog(step: String): Unit = {
     if (metricsEnabled) stepStart.update(step, now)
