@@ -1,0 +1,33 @@
+{
+  "source": "order-api",
+  "generated_at": "2026-05-12T01:10:00Z",
+  "data": [
+    {
+      "order_id": "O-2001",
+      "customer_id": "C001",
+      "product_sku": "SKU-002",
+      "quantity": 3,
+      "order_total": 450.0,
+      "order_date": "2026-05-01",
+      "status": "SHIPPED"
+    },
+    {
+      "order_id": "O-2002",
+      "customer_id": "C006",
+      "product_sku": "SKU-003",
+      "quantity": 1,
+      "order_total": 390.0,
+      "order_date": "invalid-date",
+      "status": "FAILED_VALIDATION"
+    },
+    {
+      "order_id": "O-2002",
+      "customer_id": "C006",
+      "product_sku": "SKU-003",
+      "quantity": 1,
+      "order_total": 390.0,
+      "order_date": "invalid-date",
+      "status": "FAILED_VALIDATION"
+    }
+  ]
+}

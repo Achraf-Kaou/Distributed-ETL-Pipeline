@@ -38,7 +38,8 @@ lazy val root = (project in file("."))
       "org.apache.logging.log4j" % "log4j-layout-template-json" % "2.23.1",
 
       // Testing
-      "org.scalameta" %% "munit" % "1.0.0" % Test
+      "org.scalameta" %% "munit" % "1.0.0" % Test,
+      "org.scalatest" %% "scalatest" % "3.2.19" % Test
     )
   )
 

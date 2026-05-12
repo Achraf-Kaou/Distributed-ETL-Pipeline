@@ -27,7 +27,8 @@ class MySuite extends munit.FunSuite {
   }
 
   test("quality checks detect nulls and duplicates") {
-    import spark.implicits._
+    val sparkSession = spark
+    import sparkSession.implicits._
     val df = Seq(
       (1, "a@x.com", "eng"),
       (2, "a@x.com", "eng"),
@@ -49,7 +50,8 @@ class MySuite extends munit.FunSuite {
   }
 
   test("star schema builder creates expected tables") {
-    import spark.implicits._
+    val sparkSession = spark
+    import sparkSession.implicits._
     val df = Seq(
       (1, "Alice", "alice@x.com", 1000.0, "2025-01-01", "engineering", "fr", "paris", "active"),
       (2, "Bob", "bob@x.com", 1500.0, "2025-01-02", "finance", "fr", "lyon", "active")
@@ -58,9 +60,9 @@ class MySuite extends munit.FunSuite {
     val cfg = PipelineConfig.load("application.conf")
     val star = StarSchemaBuilder.build(spark, df, cfg.warehouse)
 
-    assertEquals(star.dimDepartment.count(), 2)
-    assertEquals(star.dimEmployee.count(), 2)
-    assertEquals(star.dimDate.count(), 2)
-    assertEquals(star.factEmployeeMetrics.count(), 2)
+    assertEquals(star.dimDepartment.count(), 2L)
+    assertEquals(star.dimEmployee.count(), 2L)
+    assertEquals(star.dimDate.count(), 2L)
+    assertEquals(star.factEmployeeMetrics.count(), 2L)
   }
 }

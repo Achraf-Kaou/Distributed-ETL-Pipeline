@@ -1,5 +1,6 @@
 dept_id,dept_name,manager,location,budget
-IT,Information Technology,Alice Dupont,Paris,1200000
-HR,Human Resources,Bob Martin,Lyon,450000
-Finance,Finance Department,Paul Dubois,Marseille,890000
-Marketing,Marketing & Sales,Emma Laurent,Bordeaux,670000
+sales,Global Sales,Amelia Hart,"New York, USA",2100000
+IT,Technology & Platforms,Noah Singh,Toronto,1850000
+finance,Corporate Finance,Leila Benali,Paris,1625000
+HR,People Operations,Sophia Chen,Singapore,980000
+operations,Field Operations,Marco Rossi,Rome,1210000

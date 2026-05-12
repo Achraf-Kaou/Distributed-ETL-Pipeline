@@ -1,0 +1,7 @@
+customer_id,customer_name,email,country,city,loyalty_tier,created_at,source_system,status
+C001,Northwind Retail,contact@northwind.example,USA,New York,platinum,2023-01-15,crm,active
+C002,Blue Ocean Trading,operations@blueocean.example,uk,London,gold,2023-06-21,crm,active
+C003,Blue Ocean Trading,operations@blueocean.example,United Kingdom,london,gold,2024-11-02,erp,active
+C004,Orchid Ventures,billing_at_orchid.example,FR,Paris,silver,2024-03-09,crm,active
+C005,Desert Peak,,AE,Dubai,bronze,2025-02-30,partner_portal,pending
+C006,Maple Labs,sales@maplelabs.example,"CA / Toronto","Toronto, CA",gold,2022-08-11,crm,inactive

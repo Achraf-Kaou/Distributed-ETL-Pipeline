@@ -1,0 +1,30 @@
+{
+  "source": "crm-api",
+  "generated_at": "2026-05-12T01:00:00Z",
+  "data": [
+    {
+      "customer_id": "C001",
+      "customer_name": "Northwind Retail",
+      "email": "contact@northwind.example",
+      "country": "usa",
+      "city": "NEW YORK",
+      "status": "active"
+    },
+    {
+      "customer_id": "C003",
+      "customer_name": "Blue Ocean Trading",
+      "email": "operations@blueocean.example",
+      "country": "UK",
+      "city": "London",
+      "status": "active"
+    },
+    {
+      "customer_id": "C004",
+      "customer_name": "Orchid Ventures",
+      "email": "billing_at_orchid.example",
+      "country": "France",
+      "city": "Paris",
+      "status": "active"
+    }
+  ]
+}

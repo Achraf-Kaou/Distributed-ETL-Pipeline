@@ -33,3 +33,5 @@ metals.sbt
 
 logs/
 output/
+
+.env

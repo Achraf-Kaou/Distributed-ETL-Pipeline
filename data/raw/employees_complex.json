@@ -1,44 +1,88 @@
 {
   "metadata": {
-    "source": "api_v2",
-    "generated_at": "2026-05-11",
-    "total_records": 5
+    "source": "enterprise_api_v2",
+    "generated_at": "2026-05-12T00:00:00Z",
+    "total_records": 4
   },
   "employees": [
     {
-      "id": 8,
+      "id": 201,
       "personal_info": {
-        "full_name": "Marie Dubois",
-        "age": 33,
-        "email": "marie.dubois@company.fr"
+        "full_name": "Sophia Chen",
+        "age": 39,
+        "email": "sophia.chen@corp.example"
       },
       "employment": {
-        "department": "IT",
-        "salary": 72000,
-        "join_date": "2024-02-01",
+        "department": "hr",
+        "salary": 70500,
+        "join_date": "2025-02-14",
         "status": "Active"
       },
       "address": {
-        "city": "Nice",
-        "country": "France"
+        "city": "Singapore",
+        "country": "SG"
+      },
+      "source_meta": {
+        "ingested_at": "2026-05-11T23:58:00Z",
+        "record_type": "late_arriving_correction"
       }
     },
     {
-      "id": 9,
+      "id": 202,
       "personal_info": {
-        "full_name": "Lucas Moreau",
+        "full_name": "Avery Stone",
+        "age": null,
+        "email": "avery.stone@corp.example"
+      },
+      "employment": {
+        "department": "IT",
+        "salary": 66000,
+        "join_date": "2024-10-11",
+        "status": "active"
+      },
+      "address": {
+        "city": "Austin / US",
+        "country": "United States"
+      }
+    },
+    {
+      "id": 203,
+      "personal_info": {
+        "full_name": "Rania El Idrissi",
         "age": 27,
-        "email": "lucas.m@company.fr"
+        "email": "rania.elidrissi@corp.example"
       },
       "employment": {
         "department": "Finance",
-        "salary": 58000,
-        "join_date": "2025-01-15",
+        "salary": 64000,
+        "join_date": "invalid-date",
         "status": "Active"
       },
       "address": {
-        "city": "Paris",
-        "country": "France"
+        "city": "Casablanca",
+        "country": "ma"
+      }
+    },
+    {
+      "id": 204,
+      "personal_info": {
+        "full_name": "Late Arrival",
+        "age": 44,
+        "email": "late.arrival@@corp.example"
+      },
+      "employment": {
+        "department": "Sales",
+        "salary": 59000,
+        "join_date": "2018-06-30",
+        "status": "Inactive"
+      },
+      "address": {
+        "city": "Berlin",
+        "country": "DE"
+      },
+      "source_meta": {
+        "ingested_at": "2026-05-12T02:15:00Z",
+        "record_type": "historical_backfill"
       }
     }
   ]

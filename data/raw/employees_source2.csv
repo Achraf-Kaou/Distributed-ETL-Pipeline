@@ -1,4 +1,7 @@
-ID,Full Name,Age,Location,Email,Dept,Salary,StartDate,Status
-5,David Leclerc,45,Toulouse,France,david@leclerc.fr,IT,75000,2021-03-12,Active
-6,Sophie Bernard,29,Lille,France,sophie.b@company.fr,Marketing,49000,2024-02-28,Active
-7,John Smith,,London,UK,john.smith@company.com,IT,68000,2023-06-01,Active
+ID,Full Name,Age,Location,Country,Email,Dept,Salary,StartDate,Status
+101,Noah Singh,36, Toronto ,canada,noah.singh@corp.example,Technology,102000,2024-12-01,Active
+102,Zara Ali,31,dubai,UAE,zara.ali@corp.example,Finance,83000,2022-07-19,ACTIVE
+103,Marco Rossi,30,ROME,Italy,marco.rossi@corp.example,Operations,56000,2024-03-01,Active
+104,Leila Benali,34,Paris,France,leila.benali@corp.example,finance,79000,2024-03-05,Active
+105,  Avery Stone  ,,Austin,US,avery.stone@corp.example,IT,65000,2024-10-11,
+106,Null Case,,,Unknown,,HR,50000,not-a-date,Active

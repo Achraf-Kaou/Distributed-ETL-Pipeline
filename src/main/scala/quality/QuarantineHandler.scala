@@ -35,8 +35,12 @@ import java.time.Instant
  *
  * @param spark   Active [[SparkSession]] — required for DataFrame operations.
  * @param logger  [[PipelineLogger]] for warning messages when rows are quarantined.
+ * @param quarantineBasePath Base directory for all quarantined data within this pipeline instance.
  */
-class QuarantineHandler(spark: SparkSession, logger: PipelineLogger) {
+class QuarantineHandler(
+  spark: SparkSession, 
+  logger: PipelineLogger,
+  quarantineBasePath: String = "output/quarantine") {
 
   /** Base directory for all quarantined data within this pipeline instance. */
   private val quarantineBasePath = "output/quarantine"

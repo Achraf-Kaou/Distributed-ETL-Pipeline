@@ -499,6 +499,30 @@ The pipeline emits step-by-step progress to stdout using emoji markers:
 
 ---
 
+**Parquet output is empty?** Verify `data/raw/` contains supported files and `exclude-name-contains` is not too broad.
+
+---
+
+## Enterprise Test Data Additions
+
+The repository now includes richer datasets for employee mastering, customer onboarding, order events, product catalogs, transaction corrections, API mock payloads, and seeded relational databases. The data intentionally contains duplicates, nulls, malformed emails, mixed casing, invalid dates, conflicting source records, and late-arriving updates so the cleaning, deduplication, join, aggregation, quarantine, and warehouse-loading paths can be exercised realistically.
+
+## Developer Experience Assets
+
+- `Makefile` — common developer workflows.
+- `scripts/validate-env.sh` — environment readiness checks.
+- `scripts/start-infra.sh` / `scripts/stop-infra.sh` — Docker lifecycle helpers.
+- `scripts/reset-databases.sh` / `scripts/load-seed-data.sh` — repeatable seed refresh.
+- `scripts/run-etl.sh` / `scripts/run-tests.sh` / `scripts/package-project.sh` — execution helpers.
+- `docs/developer-onboarding.md` — quick-start workflow.
+- `docs/troubleshooting.md` — common operational fixes.
+
+## Sample Production Config
+
+Use `application.prod.conf` when you want environment-variable-driven configuration without modifying the default `application.conf`.
+
+---
+
 ## Troubleshooting
 
 **Databases not connecting?**

@@ -1,0 +1,48 @@
+{
+  "orders": [
+    {
+      "order_id": "O-1001",
+      "customer_id": "C001",
+      "product_sku": "SKU-001",
+      "quantity": 4,
+      "order_total": 1200.5,
+      "order_date": "2026-04-30",
+      "status": "SHIPPED",
+      "country": "USA",
+      "city": "New York"
+    },
+    {
+      "order_id": "O-1002",
+      "customer_id": "C002",
+      "product_sku": "SKU-003",
+      "quantity": 2,
+      "order_total": 780.0,
+      "order_date": "2026-04-31",
+      "status": "PROCESSING",
+      "country": "uk",
+      "city": "london"
+    },
+    {
+      "order_id": "O-1002",
+      "customer_id": "C002",
+      "product_sku": "SKU-003",
+      "quantity": 2,
+      "order_total": 780.0,
+      "order_date": "2026-04-31",
+      "status": "PROCESSING",
+      "country": "United Kingdom",
+      "city": "London"
+    },
+    {
+      "order_id": "O-1003",
+      "customer_id": "C005",
+      "product_sku": "SKU-404",
+      "quantity": 1,
+      "order_total": 99.99,
+      "order_date": "2021-12-11",
+      "status": "LATE_ARRIVING",
+      "country": "AE",
+      "city": "Dubai"
+    }
+  ]
+}

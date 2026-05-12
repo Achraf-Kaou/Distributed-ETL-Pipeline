@@ -1,6 +1,7 @@
 import org.apache.spark.sql.{DataFrame, SparkSession}
 import org.apache.spark.sql.functions.col
 import org.apache.spark.sql.types._
+import org.apache.spark.sql.types.StringType
 import java.io.File
 
 import audit.AuditLogger
@@ -33,7 +34,8 @@ object Main {
 
   def main(args: Array[String]): Unit = {
     // Load config first because SparkSession settings (app name/master/partitions) come from it.
-    val config = PipelineConfig.load()
+    val configPath = args.headOption.orElse(sys.props.get("etl.config")).getOrElse("application.conf")
+    val config = PipelineConfig.load(configPath)
 
     val spark = SparkSession.builder()
       .appName(config.spark.appName)
@@ -88,8 +90,8 @@ class EtlPipeline(spark: SparkSession, appConfig: AppConfig) {
   // generated run id for this pipeline invocation
   private val runId: String = java.util.UUID.randomUUID().toString
   // simple file-based audit logger (directory ensured inside)
-  private val auditLogger = new AuditLogger(s"$outputBase/final/warehouse/audit.log")
-  private val quarantineHandler = new QuarantineHandler(spark, logger)
+  private val auditLogger = new AuditLogger(s"${appConfig.audit.outputPath}/audit.log")
+  private val quarantineHandler = new QuarantineHandler(spark, logger, appConfig.quarantine.basePath)
 
   private val orchestrator = new PipelineOrchestrator(
     appConfig.orchestration.stages,
@@ -127,15 +129,19 @@ class EtlPipeline(spark: SparkSession, appConfig: AppConfig) {
 
       val cleanedDF = orchestrator.runStage("clean", extractedCount) { clean(rawDF) }.getOrElse(rawDF)
       runQualityChecks(cleanedDF, "clean")
+      val cleanedCount = cleanedDF.count()
 
-      val deduplicatedDF = orchestrator.runStage("dedup", extractedCount) { deduplicate(cleanedDF) }.getOrElse(cleanedDF)
+      val deduplicatedDF = orchestrator.runStage("dedup", cleanedCount) { deduplicate(cleanedDF) }.getOrElse(cleanedDF)
       runQualityChecks(deduplicatedDF, "dedup")
+      val deduplicatedCount = deduplicatedDF.count()
 
-      val enrichedDF = orchestrator.runStage("join", extractedCount) { applyConfiguredJoins(deduplicatedDF) }.getOrElse(deduplicatedDF)
+      val enrichedDF = orchestrator.runStage("join", deduplicatedCount) { applyConfiguredJoins(deduplicatedDF) }.getOrElse(deduplicatedDF)
+      val enrichedCount = enrichedDF.count()
 
-      val aggregatedDF = orchestrator.runStage("aggregate", extractedCount) { aggregate(enrichedDF) }.getOrElse(enrichedDF)
+      val aggregatedDF = orchestrator.runStage("aggregate", enrichedCount) { aggregate(enrichedDF) }.getOrElse(enrichedDF)
+      val aggregatedCount = aggregatedDF.count()
 
-      val starSchema = orchestrator.runStage("build_star", extractedCount) {
+      val starSchema = orchestrator.runStage("build_star", enrichedCount) {
         StarSchemaBuilder.build(spark, enrichedDF, appConfig.warehouse, logger.warn)
       }
 
@@ -145,6 +151,8 @@ class EtlPipeline(spark: SparkSession, appConfig: AppConfig) {
           WarehouseLoader.loadStarSchema(star, appConfig.warehouse, appConfig.load.warehouseTarget, appConfig.load.upsert)
         }
       }
+
+      logRunSummary(extractedCount, cleanedCount, deduplicatedCount, enrichedCount, aggregatedCount, starSchema)
 
       logger.info("Full ETL Pipeline completed successfully.")
 
@@ -437,8 +445,8 @@ class EtlPipeline(spark: SparkSession, appConfig: AppConfig) {
     val runId = this.runId 
 
     // === QUARANTINE BAD ROWS BEFORE CLEANING ===
-    val quarantineHandler = new quality.QuarantineHandler(spark, logger)
-
+    val quarantineHandler = new quality.QuarantineHandler(spark, logger, appConfig.quarantine.basePath)
+    
     var cleaned = df
 
     // 1. Quarantine rows with critical nulls (most important)
@@ -489,7 +497,7 @@ class EtlPipeline(spark: SparkSession, appConfig: AppConfig) {
     val dedupCfg = appConfig.transform.deduplicate
 
     // implement the quarantine of duplicates if enabled before deduplication
-    val quarantineHandler = new quality.QuarantineHandler(spark, logger)
+    val quarantineHandler = new quality.QuarantineHandler(spark, logger, appConfig.quarantine.basePath)
     var dfToDedup = df
 
     if (appConfig.transform.deduplicate.enabled) {
@@ -537,7 +545,7 @@ class EtlPipeline(spark: SparkSession, appConfig: AppConfig) {
     if (activeJoins.isEmpty) return df
 
     // implement quarantine of rows with missing join keys if enabled before applying joins
-    val quarantineHandler = new quality.QuarantineHandler(spark, logger)
+    val quarantineHandler = new quality.QuarantineHandler(spark, logger, appConfig.quarantine.basePath)
     var dfToJoin = df
     activeJoins.foreach { j =>
       if (j.keyColumns.nonEmpty) {
@@ -585,6 +593,11 @@ class EtlPipeline(spark: SparkSession, appConfig: AppConfig) {
       }
 
       val rightDf = normalizeAndMap(flattenStructs(rightRaw))
+      val keyPairs = if (j.keyMappings.nonEmpty) j.keyMappings else j.keyColumns.map(k => k -> k)
+      val leftKeys = keyPairs.map(_._1)
+      val rightKeys = keyPairs.map(_._2)
+      val normalizedLeft = normalizeJoinKeys(leftDf, leftKeys)
+      val normalizedRight = normalizeJoinKeys(rightDf, rightKeys)
       val joinConfig = TransformJoin.JoinConfig(
         joinType = j.joinType,
         keyColumns = j.keyColumns,
@@ -594,8 +607,37 @@ class EtlPipeline(spark: SparkSession, appConfig: AppConfig) {
         rightPrefix = j.rightPrefix,
         verbose = j.verbose
       )
-      TransformJoin.join(leftDf, rightDf, joinConfig)
+      TransformJoin.join(normalizedLeft, normalizedRight, joinConfig)
     }
+  }
+
+  private def normalizeJoinKeys(df: DataFrame, keyColumns: Seq[String]): DataFrame = {
+    keyColumns.distinct.foldLeft(df) { (acc, columnName) =>
+      acc.schema.find(_.name == columnName) match {
+        case Some(field) if field.dataType == StringType =>
+          acc.withColumn(columnName, org.apache.spark.sql.functions.trim(org.apache.spark.sql.functions.lower(col(columnName))))
+        case _ =>
+          acc
+      }
+    }
+  }
+
+  private def logRunSummary(
+    extractedCount: Long,
+    cleanedCount: Long,
+    deduplicatedCount: Long,
+    enrichedCount: Long,
+    aggregatedCount: Long,
+    starSchema: Option[StarSchemaBuilder.StarSchemaResult]
+  ): Unit = {
+    val dimDepartmentCount = starSchema.map(_.dimDepartment.count()).getOrElse(0L)
+    val dimEmployeeCount = starSchema.map(_.dimEmployee.count()).getOrElse(0L)
+    val dimDateCount = starSchema.map(_.dimDate.count()).getOrElse(0L)
+    val factCount = starSchema.map(_.factEmployeeMetrics.count()).getOrElse(0L)
+
+    logger.info(
+      s"Pipeline summary | extracted=$extractedCount cleaned=$cleanedCount deduplicated=$deduplicatedCount enriched=$enrichedCount aggregated=$aggregatedCount dim_department=$dimDepartmentCount dim_employee=$dimEmployeeCount dim_date=$dimDateCount fact_rows=$factCount"
+    )
   }
 
   /**
@@ -617,7 +659,7 @@ class EtlPipeline(spark: SparkSession, appConfig: AppConfig) {
     val aggregationCfg = appConfig.transform.aggregation
 
     // implement quarantine of rows with missing aggregation keys if enabled before applying aggregation
-    val quarantineHandler = new quality.QuarantineHandler(spark, logger)
+    val quarantineHandler = new quality.QuarantineHandler(spark, logger, appConfig.quarantine.basePath)
     var dfToAggregate = df
     if (aggregationCfg.enabled && aggregationCfg.groupBy.nonEmpty) {
       dfToAggregate = quarantineHandler.quarantineAndClean(
