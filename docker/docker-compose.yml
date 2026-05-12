@@ -49,6 +49,35 @@ services:
       sh -c "apk add --no-cache sqlite && sqlite3 /sqlite/data/etl.db < /init.sql && echo '✅ SQLite DB created at /sqlite/data/etl.db'"
     restart: "no"
 
+  load-db: 
+    image: postgres:16-alpine
+    container_name: etl_load_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB:       load_db
+      POSTGRES_USER:     load_user
+      POSTGRES_PASSWORD: load_pass
+    ports:
+      - "5433:5432"
+    volumes:
+      - load_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U load_user -d load_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: load_pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL:    load_user@email.com
+      PGADMIN_DEFAULT_PASSWORD: load_pass
+    ports:
+      - "8080:80"
+    depends_on:
+      - load-db
+
 volumes:
   postgres_data:
   mysql_data:
@@ -58,3 +87,4 @@ volumes:
       type: none
       o: bind
       device: ./sqlite/data
+  load_db_data:
