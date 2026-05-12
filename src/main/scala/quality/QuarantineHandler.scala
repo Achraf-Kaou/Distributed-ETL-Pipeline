@@ -42,9 +42,6 @@ class QuarantineHandler(
   logger: PipelineLogger,
   quarantineBasePath: String = "output/quarantine") {
 
-  /** Base directory for all quarantined data within this pipeline instance. */
-  private val quarantineBasePath = "output/quarantine"
-
   /**
    * Separate rows that violate critical-column constraints from the clean set.
    *
