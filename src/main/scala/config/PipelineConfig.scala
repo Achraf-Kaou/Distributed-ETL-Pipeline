@@ -16,12 +16,18 @@ object PipelineConfig {
     orchestration: OrchestrationConfig,
     logging: LoggingConfig,
     audit: AuditConfig,
+    quarantine: QuarantineConfig,
   )
 
   case class SparkConfig(
     appName: String,
     master: String,
     shufflePartitions: Int
+  )
+
+  case class QuarantineConfig(
+    enabled: Boolean,
+    basePath: String
   )
 
   case class AuditConfig(
@@ -201,6 +207,7 @@ object PipelineConfig {
       orchestration = parseOrchestration(getConfigOrElse(root, "orchestration", ConfigFactory.parseString(""))),
       logging = parseLogging(getConfigOrElse(root, "logging", ConfigFactory.parseString(""))),
       audit = parseAudit(root.getConfig("audit")),
+      quarantine = parseQuarantine(root.getConfig("quarantine")),
     )
   }
 
@@ -210,6 +217,14 @@ object PipelineConfig {
       appName = getStringOrElse(spark, "app-name", "Distributed ETL Pipeline"),
       master = getStringOrElse(spark, "master", "local[*]"),
       shufflePartitions = getIntOrElse(spark, "shuffle-partitions", 8)
+    )
+  }
+
+  private def parseQuarantine(c: Config): QuarantineConfig = {
+    val quarantine = getConfigOrElse(c, "quarantine", ConfigFactory.parseString(""))
+    QuarantineConfig(
+      enabled = getBooleanOrElse(quarantine, "enabled", false),
+      basePath = getStringOrElse(quarantine, "base-path", "output/quarantine")
     )
   }
 

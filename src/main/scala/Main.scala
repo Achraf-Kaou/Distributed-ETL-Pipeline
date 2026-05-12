@@ -8,6 +8,7 @@ import java.time.Instant
 import config.PipelineConfig
 import config.PipelineConfig.{AppConfig, DatabaseSourceConfig}
 import extract.{ExtractApi, ExtractDatabase, ExtractFlatFiles}
+import quality.QuarantineHandler
 import load.{StarSchemaBuilder, WarehouseLoader}
 import logging.PipelineLogger
 import orchestration.PipelineOrchestrator
@@ -50,6 +51,7 @@ class EtlPipeline(spark: SparkSession, appConfig: AppConfig) {
   private val runId: String = java.util.UUID.randomUUID().toString
   // simple file-based audit logger (directory ensured inside)
   private val auditLogger = new AuditLogger(s"$outputBase/final/warehouse/audit.log")
+  private val quarantineHandler = new QuarantineHandler(spark, logger)
 
   private val orchestrator = new PipelineOrchestrator(
     appConfig.orchestration.stages,
@@ -277,11 +279,32 @@ class EtlPipeline(spark: SparkSession, appConfig: AppConfig) {
   }
 
   private def clean(df: DataFrame): DataFrame = {
-    logger.info("Cleaning phase")
+    logger.info("Cleaning phase started")
 
-    if (!appConfig.transform.clean.enabled) return df
+    if (!appConfig.transform.clean.enabled) {
+      logger.info("Cleaning phase is disabled in config")
+      return df
+    }
 
     val cleanCfg = appConfig.transform.clean
+    val runId = this.runId 
+
+    // === QUARANTINE BAD ROWS BEFORE CLEANING ===
+    val quarantineHandler = new quality.QuarantineHandler(spark, logger)
+
+    var cleaned = df
+
+    // 1. Quarantine rows with critical nulls (most important)
+    if (cleanCfg.criticalColumns.nonEmpty) {
+      cleaned = quarantineHandler.quarantineAndClean(
+        df = cleaned,
+        runId = runId,
+        stage = "clean",
+        criticalColumns = cleanCfg.criticalColumns,
+        reason = "critical_nulls"
+      )
+    }
+
     val cleanConfig = TransformClean.CleanConfig(
       criticalColumns = cleanCfg.criticalColumns,
       fillValues = cleanCfg.fillValues,
@@ -293,7 +316,10 @@ class EtlPipeline(spark: SparkSession, appConfig: AppConfig) {
       verbose = cleanCfg.verbose
     )
 
-    TransformClean.clean(df, cleanConfig)
+    cleaned = TransformClean.clean(cleaned, cleanConfig)
+
+    logger.info(s"Cleaning phase completed. Final row count: ${cleaned.count()}")
+    cleaned
   }
 
   private def deduplicate(df: DataFrame): DataFrame = {
@@ -302,6 +328,21 @@ class EtlPipeline(spark: SparkSession, appConfig: AppConfig) {
     if (!appConfig.transform.deduplicate.enabled) return df
 
     val dedupCfg = appConfig.transform.deduplicate
+
+    // implement the quarantine of duplicates if enabled before deduplication
+    val quarantineHandler = new quality.QuarantineHandler(spark, logger)
+    var dfToDedup = df
+
+    if (appConfig.transform.deduplicate.enabled) {
+      dfToDedup = quarantineHandler.quarantineAndClean(
+        df = dfToDedup,
+        runId = runId,
+        stage = "dedup",
+        criticalColumns = appConfig.transform.deduplicate.keyColumns,
+        reason = "duplicates"
+      )
+    }
+
     val dedupConfig = TransformDeduplicate.DeduplicateConfig(
       keyColumns = dedupCfg.keyColumns,
       recencyColumn = dedupCfg.recencyColumn,
@@ -311,14 +352,29 @@ class EtlPipeline(spark: SparkSession, appConfig: AppConfig) {
       verbose = dedupCfg.verbose
     )
 
-    TransformDeduplicate.deduplicate(df, dedupConfig)
+    TransformDeduplicate.deduplicate(dfToDedup, dedupConfig)
   }
 
   private def applyConfiguredJoins(df: DataFrame): DataFrame = {
     val activeJoins = appConfig.transform.joins.filter(_.enabled)
     if (activeJoins.isEmpty) return df
 
-    activeJoins.foldLeft(df) { (leftDf, j) =>
+    // implement quarantine of rows with missing join keys if enabled before applying joins
+    val quarantineHandler = new quality.QuarantineHandler(spark, logger)
+    var dfToJoin = df
+    activeJoins.foreach { j =>
+      if (j.keyColumns.nonEmpty) {
+        dfToJoin = quarantineHandler.quarantineAndClean(
+          df = dfToJoin,
+          runId = runId,
+          stage = s"join_${j.name}",
+          criticalColumns = j.keyColumns.map(TransformClean.toSnakeCase),
+          reason = "missing_join_keys"
+        )
+      }
+    }
+
+    activeJoins.foldLeft(dfToJoin) { (leftDf, j) =>
       logger.info(s"Join phase - ${j.name}")
       val rightRaw = j.rightSourceType.trim.toLowerCase match {
         case "flat" =>
@@ -371,6 +427,20 @@ class EtlPipeline(spark: SparkSession, appConfig: AppConfig) {
     if (!appConfig.transform.aggregation.enabled) return df
 
     val aggregationCfg = appConfig.transform.aggregation
+
+    // implement quarantine of rows with missing aggregation keys if enabled before applying aggregation
+    val quarantineHandler = new quality.QuarantineHandler(spark, logger)
+    var dfToAggregate = df
+    if (aggregationCfg.enabled && aggregationCfg.groupBy.nonEmpty) {
+      dfToAggregate = quarantineHandler.quarantineAndClean(
+        df = dfToAggregate,
+        runId = runId,
+        stage = "aggregate",
+        criticalColumns = aggregationCfg.groupBy.map(colName => TransformClean.toSnakeCase(colName)),
+        reason = "missing_aggregation_keys"
+      )
+    }
+
     val aggregationConfig = TransformAggregate.AggregationConfig(
       enabled = aggregationCfg.enabled,
       groupByColumns = aggregationCfg.groupBy,
@@ -380,7 +450,7 @@ class EtlPipeline(spark: SparkSession, appConfig: AppConfig) {
       suffixEnabled = aggregationCfg.suffixEnabled
     )
 
-    TransformAggregate.aggregate(df, aggregationConfig)
+    TransformAggregate.aggregate(dfToAggregate, aggregationConfig)
   }
 
   private def save(df: DataFrame, format: String = "parquet"): Unit = {
