@@ -14,13 +14,19 @@ object PipelineConfig {
     warehouse: WarehouseConfig,
     load: LoadConfig,
     orchestration: OrchestrationConfig,
-    logging: LoggingConfig
+    logging: LoggingConfig,
+    audit: AuditConfig,
   )
 
   case class SparkConfig(
     appName: String,
     master: String,
     shufflePartitions: Int
+  )
+
+  case class AuditConfig(
+    enabled: Boolean,
+    outputPath: String
   )
 
   case class QualityConfig(
@@ -193,7 +199,8 @@ object PipelineConfig {
       warehouse = parseWarehouse(getConfigOrElse(root, "warehouse", ConfigFactory.parseString(""))),
       load = parseLoad(root.getConfig("load")),
       orchestration = parseOrchestration(getConfigOrElse(root, "orchestration", ConfigFactory.parseString(""))),
-      logging = parseLogging(getConfigOrElse(root, "logging", ConfigFactory.parseString("")))
+      logging = parseLogging(getConfigOrElse(root, "logging", ConfigFactory.parseString(""))),
+      audit = parseAudit(root.getConfig("audit")),
     )
   }
 
@@ -398,6 +405,14 @@ object PipelineConfig {
       level = getStringOrElse(c, "level", "INFO"),
       metricsEnabled = getBooleanOrElse(c, "metrics-enabled", true)
     )
+
+  private def parseAudit(c: Config): AuditConfig = {
+    val audit = getConfigOrElse(c, "audit", ConfigFactory.parseString(""))
+    AuditConfig(
+      enabled = getBooleanOrElse(audit, "enabled", true),
+      outputPath = getStringOrElse(audit, "output-path", "output/audit")
+    )
+  }
 
   private def getStringSeq(c: Config, key: String): Seq[String] =
     if (c.hasPath(key)) c.getStringList(key).asScala.toSeq else Seq.empty

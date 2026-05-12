@@ -30,6 +30,13 @@ lazy val root = (project in file("."))
       "mysql"          %  "mysql-connector-java" % "8.0.33",
       "org.xerial"     %  "sqlite-jdbc"          % "3.45.3.0",
 
+      // Logging
+      "org.apache.logging.log4j" % "log4j-api" % "2.23.1",
+      "org.apache.logging.log4j" % "log4j-core" % "2.23.1",
+      "org.apache.logging.log4j" % "log4j-slf4j2-impl" % "2.23.1", // if using SLF4J bridges
+      // JSON layout
+      "org.apache.logging.log4j" % "log4j-layout-template-json" % "2.23.1",
+
       // Testing
       "org.scalameta" %% "munit" % "1.0.0" % Test
     )
@@ -39,6 +46,7 @@ lazy val root = (project in file("."))
 
   run / javaOptions ++= Seq(
     "--add-exports=java.base/sun.nio.ch=ALL-UNNAMED",
+    "--add-exports=java.base/sun.util.calendar=ALL-UNNAMED",
     "--add-opens=java.base/java.nio=ALL-UNNAMED", 
     "--add-opens=java.base/java.io=ALL-UNNAMED",
     "--add-opens=java.base/sun.nio.cs=ALL-UNNAMED",

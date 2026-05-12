@@ -3,6 +3,8 @@ import org.apache.spark.sql.functions.col
 import org.apache.spark.sql.types._
 import java.io.File
 
+import audit.AuditLogger
+import java.time.Instant
 import config.PipelineConfig
 import config.PipelineConfig.{AppConfig, DatabaseSourceConfig}
 import extract.{ExtractApi, ExtractDatabase, ExtractFlatFiles}
@@ -44,46 +46,71 @@ class EtlPipeline(spark: SparkSession, appConfig: AppConfig) {
 
   private val outputBase = appConfig.load.outputBasePath
   private val logger = new PipelineLogger(appConfig.logging.metricsEnabled)
+  // generated run id for this pipeline invocation
+  private val runId: String = java.util.UUID.randomUUID().toString
+  // simple file-based audit logger (directory ensured inside)
+  private val auditLogger = new AuditLogger(s"$outputBase/final/warehouse/audit.log")
+
   private val orchestrator = new PipelineOrchestrator(
     appConfig.orchestration.stages,
     appConfig.orchestration.failFast,
-    logger
+    logger,
+    auditLogger,
+    runId
   )
 
   def run(): Unit = {
+    val startTime = Instant.now().toString
+
     logger.info("=" * 90)
-    logger.info("Starting Distributed ETL Pipeline")
+    logger.info("Starting Distributed ETL Pipeline - Run ID: " + runId)
     logger.info("=" * 90)
+    try {
+      val rawDF = orchestrator.runStage("extract") { extractAllSources() }.getOrElse(spark.emptyDataFrame)
 
-    val rawDF = orchestrator.runStage("extract") { extractAllSources() }.getOrElse(spark.emptyDataFrame)
+      val extractedCount = rawDF.count()
 
-    if (rawDF.isEmpty) {
-      logger.warn("No data extracted. Exiting.")
-      return
-    }
-
-    val cleanedDF = orchestrator.runStage("clean") { clean(rawDF) }.getOrElse(rawDF)
-    runQualityChecks(cleanedDF, "clean")
-
-    val deduplicatedDF = orchestrator.runStage("dedup") { deduplicate(cleanedDF) }.getOrElse(cleanedDF)
-    runQualityChecks(deduplicatedDF, "dedup")
-
-    val enrichedDF = orchestrator.runStage("join") { applyConfiguredJoins(deduplicatedDF) }.getOrElse(deduplicatedDF)
-
-    val aggregatedDF = orchestrator.runStage("aggregate") { aggregate(enrichedDF) }.getOrElse(enrichedDF)
-
-    val starSchema = orchestrator.runStage("build_star") {
-      StarSchemaBuilder.build(spark, enrichedDF, appConfig.warehouse, logger.warn)
-    }
-
-    orchestrator.runStage("load") {
-      appConfig.load.enabledFormats.foreach(fmt => save(aggregatedDF, fmt))
-      starSchema.foreach { star =>
-        WarehouseLoader.loadStarSchema(star, appConfig.warehouse, appConfig.load.warehouseTarget, appConfig.load.upsert)
+      if (rawDF.isEmpty) {
+        logger.warn("No data extracted. Exiting.")
+        return
       }
-    }
 
-    logger.info("Full ETL Pipeline completed successfully.")
+      val cleanedDF = orchestrator.runStage("clean", extractedCount) { clean(rawDF) }.getOrElse(rawDF)
+      runQualityChecks(cleanedDF, "clean")
+
+      val deduplicatedDF = orchestrator.runStage("dedup", extractedCount) { deduplicate(cleanedDF) }.getOrElse(cleanedDF)
+      runQualityChecks(deduplicatedDF, "dedup")
+
+      val enrichedDF = orchestrator.runStage("join", extractedCount) { applyConfiguredJoins(deduplicatedDF) }.getOrElse(deduplicatedDF)
+
+      val aggregatedDF = orchestrator.runStage("aggregate", extractedCount) { aggregate(enrichedDF) }.getOrElse(enrichedDF)
+
+      val starSchema = orchestrator.runStage("build_star", extractedCount) {
+        StarSchemaBuilder.build(spark, enrichedDF, appConfig.warehouse, logger.warn)
+      }
+
+      orchestrator.runStage("load") {
+        appConfig.load.enabledFormats.foreach(fmt => save(aggregatedDF, fmt))
+        starSchema.foreach { star =>
+          WarehouseLoader.loadStarSchema(star, appConfig.warehouse, appConfig.load.warehouseTarget, appConfig.load.upsert)
+        }
+      }
+
+      logger.info("Full ETL Pipeline completed successfully.")
+
+      auditLogger.recordRunSummary(
+        runId = runId,
+        startTime = startTime,
+        endTime = Instant.now().toString,
+        status = "SUCCESS",
+        totalExtracted = extractedCount,
+        totalLoaded = 0 // you can track this too
+      )
+    } catch {
+      case e: Exception =>
+        auditLogger.recordRunSummary(runId, startTime, Instant.now().toString, "FAILED", 0, 0)
+        throw e
+    }
   }
 
   private def extractAllSources(): DataFrame = {
