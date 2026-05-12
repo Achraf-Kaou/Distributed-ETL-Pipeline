@@ -25,6 +25,9 @@ Designed as an academic + portfolio-grade project that demonstrates real-world d
 - [Pipeline Stages](#pipeline-stages)
 - [Logging & Monitoring](#logging--monitoring)
 - [Sample Data](#sample-data)
+- [Enterprise Test Data Additions](#enterprise-test-data-additions)
+- [Developer Experience Assets](#developer-experience-assets)
+- [Sample Production Config](#sample-production-config)
 - [Troubleshooting](#troubleshooting)
 - [Future Improvements](#future-improvements)
 
@@ -153,16 +156,17 @@ Key Spark concepts exercised:
 ## Project Structure
 
 ```
-distributedetlpipeline/
+Distributed-ETL-Pipeline/
 ├── application.conf              # Master pipeline configuration (HOCON)
 ├── build.sbt                     # SBT build: dependencies, JVM options, Scala version
 │
 ├── data/
-│   └── raw/                      # Input flat files (auto-scanned by extract stage)
+│   └── raw/                      # Input datasets (auto-scanned by extract stage)
 │       ├── employees_source1.csv     # Primary CSV source (standard schema)
 │       ├── employees_source2.csv     # CSV with non-standard column names (remapped via config)
 │       ├── employees_complex.json    # Nested JSON (auto-flattened by pipeline)
-│       └── departments.csv           # Join dimension (excluded from main extract)
+│       ├── departments.csv           # Join dimension (excluded from main extract)
+│       └── enterprise/               # Expanded test datasets (api/csv/json/parquet)
 │
 ├── docker/
 │   ├── docker-compose.yml            # 5 services: postgres, mysql, sqlite-init, load-db, pgadmin
@@ -202,7 +206,18 @@ distributedetlpipeline/
 │   │       └── audit/
 │   │           └── AuditLogger.scala          # Append-only JSON Lines audit trail
 │   └── test/
-│       └── scala/MySuite.scala        # Unit tests: config parsing, quality checks, star schema
+│       └── scala/                     # Unit and integration tests by module
+│           ├── config/
+│           ├── extract/
+│           ├── load/
+│           ├── orchestration/
+│           ├── support/
+│           ├── transform/
+│           ├── EtlPipelineIntegrationSpec.scala
+│           └── MySuite.scala
+│
+├── scripts/                          # Developer helper scripts (env/infra/test/run/package)
+├── makefile                          # Shortcut targets wrapping scripts/
 │
 ├── output/                           # Auto-created pipeline output directory
 │   ├── final/<timestamp>_final/      #   Parquet and CSV output per run
@@ -378,7 +393,7 @@ All configuration lives in `application.conf` under the `etl` root key.
 
 ```bash
 git clone https://github.com/Achraf-Kaou/Distributed-ETL-Pipeline.git
-cd Distributed-ETL-Pipeline/distributedetlpipeline
+cd Distributed-ETL-Pipeline
 ```
 
 ### 2 — Start database containers (optional)
@@ -389,7 +404,8 @@ docker compose up -d
 cd ..
 ```
 
-> Wait ~15 seconds for databases to initialise. To skip Docker entirely, set all database entries to `enabled = false` in `application.conf`.
+> Wait ~15 seconds for databases to initialise. To skip Docker entirely, set all database entries to `enabled = false` in `application.conf`.  
+> Shortcut: `make infra-up` (and later `make infra-down`).
 
 ### 3 — Run the pipeline
 
@@ -397,13 +413,16 @@ cd ..
 sbt run
 ```
 
-Output is written to `output/final/<timestamp>/`.
+Output is written to `output/final/<timestamp>/`.  
+Shortcut: `make run` (`make run-prod` uses `application.prod.conf`).
 
 ### 4 — Run tests
 
 ```bash
 sbt test
 ```
+
+Shortcut: `make test`.
 
 ### 5 — Inspect the warehouse (optional)
 
@@ -496,6 +515,12 @@ The pipeline emits step-by-step progress to stdout using emoji markers:
 | `employees_source2.csv` | CSV | Non-standard column names (`dept`, `startdate`) — remapped via `column-mapping` config |
 | `employees_complex.json` | JSON | Nested `employees` array — auto-flattened by pipeline |
 | `departments.csv` | CSV | Excluded from main extract; used as the join dimension right-side |
+| `enterprise/csv/customers_master.csv` | CSV | Customer mastering dataset with mixed quality records |
+| `enterprise/json/orders_events.json` | JSON | Event-style order payloads with lifecycle updates |
+| `enterprise/parquet/products_catalog.parquet` | Parquet | Product dimension-style source dataset |
+| `enterprise/parquet/transactions_late_arrivals.parquet` | Parquet | Late-arriving transaction updates for replay testing |
+| `enterprise/api/customers_response.json` | JSON | Mock API payload for customer endpoint testing |
+| `enterprise/api/orders_response.json` | JSON | Mock API payload for order endpoint testing |
 
 ---
 
@@ -509,11 +534,13 @@ The repository now includes richer datasets for employee mastering, customer onb
 
 ## Developer Experience Assets
 
-- `Makefile` — common developer workflows.
+- `makefile` — common developer workflows.
 - `scripts/validate-env.sh` — environment readiness checks.
 - `scripts/start-infra.sh` / `scripts/stop-infra.sh` — Docker lifecycle helpers.
+- `scripts/wait-for-services.sh` / `scripts/common.sh` — shared readiness and utility helpers.
 - `scripts/reset-databases.sh` / `scripts/load-seed-data.sh` — repeatable seed refresh.
 - `scripts/run-etl.sh` / `scripts/run-tests.sh` / `scripts/package-project.sh` — execution helpers.
+- `scripts/start-api-mock.sh` / `scripts/troubleshoot.sh` — API mock and diagnostics helpers.
 - `docs/developer-onboarding.md` — quick-start workflow.
 - `docs/troubleshooting.md` — common operational fixes.
 
