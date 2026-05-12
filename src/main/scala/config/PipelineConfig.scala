@@ -388,10 +388,9 @@ object PipelineConfig {
   }
 
   private def parseQuarantine(c: Config): QuarantineConfig = {
-    val quarantine = getConfigOrElse(c, "quarantine", ConfigFactory.parseString(""))
     QuarantineConfig(
-      enabled = getBooleanOrElse(quarantine, "enabled", false),
-      basePath = getStringOrElse(quarantine, "base-path", "output/quarantine")
+      enabled = getBooleanOrElse(c, "enabled", false),
+      basePath = getStringOrElse(c, "base-path", "output/quarantine")
     )
   }
 
@@ -589,10 +588,9 @@ object PipelineConfig {
     )
 
   private def parseAudit(c: Config): AuditConfig = {
-    val audit = getConfigOrElse(c, "audit", ConfigFactory.parseString(""))
     AuditConfig(
-      enabled = getBooleanOrElse(audit, "enabled", true),
-      outputPath = getStringOrElse(audit, "output-path", "output/audit")
+      enabled = getBooleanOrElse(c, "enabled", true),
+      outputPath = getStringOrElse(c, "output-path", "output/audit")
     )
   }
 

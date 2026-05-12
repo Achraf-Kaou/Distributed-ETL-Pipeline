@@ -273,11 +273,12 @@ object TransformClean {
   def toSnakeCase(name: String): String = {
     name
       .trim
-      .replaceAll("([A-Z])", "_$1")       // CamelCase → _Camel_Case
-      .replaceAll("[\\s\\-]+", "_")        // spaces/hyphens → underscore
-      .replaceAll("_+", "_")              // collapse multiple underscores
-      .stripPrefix("_")                   // remove leading underscore
-      .stripSuffix("_")                   // remove trailing underscore
+      .replaceAll("([A-Z]+)([A-Z][a-z])", "$1_$2")
+      .replaceAll("([a-z0-9])([A-Z])", "$1_$2")
+      .replaceAll("[\\s\\-]+", "_")
+      .replaceAll("_+", "_")
+      .stripPrefix("_")
+      .stripSuffix("_")
       .toLowerCase
   }
 
