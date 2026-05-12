@@ -2,6 +2,7 @@ package load
 
 import config.PipelineConfig.{UpsertConfig, WarehouseConfig, WarehouseTargetConfig}
 import extract.ExtractDatabase
+import java.io.File
 import org.apache.spark.sql.DataFrame
 import java.sql.{Connection, DriverManager}
 import scala.util.Using
@@ -107,7 +108,11 @@ object WarehouseLoader {
     val colList = safeColumns.mkString(",")
     val nonKeyCols = columns.filterNot(c => businessKeys.contains(c))
     val safeNonKeyCols = nonKeyCols.map(c => quotedIdentifier(c, dbType))
-    val plainInsert = s"INSERT INTO $targetTable ($colList) SELECT $colList FROM $stagingTable"
+    val selectSource = dbType match {
+      case "sqlite" => s"SELECT $colList FROM $stagingTable WHERE 1=1"
+      case _         => s"SELECT $colList FROM $stagingTable"
+    }
+    val plainInsert = s"INSERT INTO $targetTable ($colList) $selectSource"
 
     if (safeBusinessKeys.isEmpty) return plainInsert
     if (safeNonKeyCols.isEmpty) {
@@ -154,6 +159,9 @@ object WarehouseLoader {
           password = target.password
         )
       case "sqlite" =>
+        // Ensure parent directory exists for the sqlite file (Spark's JDBC will fail if path parent missing)
+        val parent = new File(target.sqliteFilePath).getParentFile
+        if (parent != null && !parent.exists()) parent.mkdirs()
         ExtractDatabase.SQLiteConfig(target.sqliteFilePath)
       case other =>
         throw new IllegalArgumentException(s"Unsupported warehouse db-type: $other")
