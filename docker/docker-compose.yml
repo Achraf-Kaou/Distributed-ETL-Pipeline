@@ -1,32 +1,77 @@
+# =============================================================================
+# docker-compose.yml — Distributed ETL Pipeline Database Services
+# =============================================================================
+#
+# Spins up four services:
+#   1. postgres    — Source database (PostgreSQL 16) on port 5432
+#   2. mysql       — Source database (MySQL 8) on port 3306
+#   3. sqlite-init — One-shot container that creates the SQLite .db file
+#   4. load-db     — Warehouse target database (PostgreSQL 16) on port 5433
+#   5. pgadmin     — Web UI for inspecting load-db on http://localhost:8080
+#
+# USAGE:
+#   cd docker/
+#   docker compose up -d          # Start all services in detached mode
+#   docker compose ps             # Check health status
+#   docker compose down -v        # Stop and remove containers + volumes
+#
+# NOTES:
+#   - Wait ~15 seconds after `up` for MySQL and Postgres to finish init.
+#   - To run the pipeline without Docker, set all databases to enabled=false
+#     in application.conf and use flat files only.
+#   - Credentials here match exactly what is configured in application.conf.
+#     Change both places if you need different values.
+# =============================================================================
+
 services:
+
+  # ---------------------------------------------------------------------------
+  # SOURCE: PostgreSQL 16
+  # ---------------------------------------------------------------------------
+  # Hosts the primary employee source dataset.
+  # Initialised by docker/postgres/init.sql on first start:
+  #   - Creates the `employees` and `departments` tables.
+  #   - Inserts sample rows for IT and HR departments.
+  # Data is persisted across restarts via the `postgres_data` named volume.
+  # ---------------------------------------------------------------------------
   postgres:
     image: postgres:16-alpine
     container_name: etl_postgres
     restart: unless-stopped
     environment:
-      POSTGRES_DB:       etl_db
-      POSTGRES_USER:     etl_user
-      POSTGRES_PASSWORD: etl_pass
+      POSTGRES_DB:       etl_db      # Database name  (matches application.conf)
+      POSTGRES_USER:     etl_user    # Username        (matches application.conf)
+      POSTGRES_PASSWORD: etl_pass    # Password        (matches application.conf)
     ports:
-      - "5432:5432"
+      - "5432:5432"                  # host:container — exposed on localhost:5432
     volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - postgres_data:/var/lib/postgresql/data          # Persistent data volume
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro  # Init script (read-only mount)
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U etl_user -d etl_db"]
       interval: 5s
       timeout: 5s
-      retries: 10
+      retries: 10   # Pipeline should wait until this passes before connecting
 
+  # ---------------------------------------------------------------------------
+  # SOURCE: MySQL 8
+  # ---------------------------------------------------------------------------
+  # Secondary employee source demonstrating multi-engine ETL extraction.
+  # Initialised by docker/mysql/init.sql on first start:
+  #   - Creates the `employees` and `departments` tables.
+  #   - Inserts sample rows for IT and Finance departments.
+  # `--default-authentication-plugin=mysql_native_password` is required because
+  # the MySQL JDBC driver used here does not support caching_sha2_password.
+  # ---------------------------------------------------------------------------
   mysql:
     image: mysql:8.0
     container_name: etl_mysql
     restart: unless-stopped
     environment:
-      MYSQL_DATABASE:      etl_db
-      MYSQL_USER:          etl_user
-      MYSQL_PASSWORD:      etl_pass
-      MYSQL_ROOT_PASSWORD: root_pass
+      MYSQL_DATABASE:      etl_db      # Schema name       (matches application.conf)
+      MYSQL_USER:          etl_user    # Non-root username  (matches application.conf)
+      MYSQL_PASSWORD:      etl_pass    # User password      (matches application.conf)
+      MYSQL_ROOT_PASSWORD: root_pass   # Root password (used only by MySQL internally)
     ports:
       - "3306:3306"
     volumes:
@@ -39,6 +84,18 @@ services:
       retries: 12
     command: --default-authentication-plugin=mysql_native_password
 
+  # ---------------------------------------------------------------------------
+  # SOURCE: SQLite (one-shot init container)
+  # ---------------------------------------------------------------------------
+  # SQLite is a file-based database — it does not run as a server.
+  # This alpine container installs sqlite3, executes docker/sqlite/init.sql
+  # to create and seed the database file, then exits (restart: "no").
+  #
+  # The resulting file is written to the `sqlite_data` bind-mount volume,
+  # which maps to ./sqlite/data/ on the host. The pipeline reads it directly
+  # via the JDBC SQLite driver using the path in application.conf:
+  #   sqlite-file-path = "docker/sqlite/data/etl.db"
+  # ---------------------------------------------------------------------------
   sqlite-init:
     image: alpine:3.19
     container_name: etl_sqlite_init
@@ -47,18 +104,29 @@ services:
       - ./sqlite/init.sql:/init.sql:ro
     command: >
       sh -c "apk add --no-cache sqlite && sqlite3 /sqlite/data/etl.db < /init.sql && echo '✅ SQLite DB created at /sqlite/data/etl.db'"
-    restart: "no"
+    restart: "no"   # One-shot: runs once and exits; never restarted
 
-  load-db: 
+  # ---------------------------------------------------------------------------
+  # WAREHOUSE TARGET: PostgreSQL 16 (load-db)
+  # ---------------------------------------------------------------------------
+  # Separate PostgreSQL instance that receives the star-schema tables via JDBC
+  # upsert after all transformations are complete.
+  # Runs on host port 5433 (mapped from internal 5432) to avoid conflict with
+  # the source postgres service above.
+  #
+  # No init script — tables are created dynamically by WarehouseLoader.ensureTable()
+  # using CREATE TABLE IF NOT EXISTS, so the schema evolves with the pipeline output.
+  # ---------------------------------------------------------------------------
+  load-db:
     image: postgres:16-alpine
     container_name: etl_load_db
     restart: unless-stopped
     environment:
-      POSTGRES_DB:       load_db
-      POSTGRES_USER:     load_user
-      POSTGRES_PASSWORD: load_pass
+      POSTGRES_DB:       load_db     # Warehouse database name (matches application.conf)
+      POSTGRES_USER:     load_user   # Warehouse username      (matches application.conf)
+      POSTGRES_PASSWORD: load_pass   # Warehouse password      (matches application.conf)
     ports:
-      - "5433:5432"
+      - "5433:5432"   # Note: host 5433 → container 5432 (avoids conflict with etl_postgres)
     volumes:
       - load_db_data:/var/lib/postgresql/data
     healthcheck:
@@ -66,7 +134,20 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
-    
+
+  # ---------------------------------------------------------------------------
+  # ADMIN UI: pgAdmin 4
+  # ---------------------------------------------------------------------------
+  # Web-based PostgreSQL management UI for inspecting the warehouse (load-db).
+  # Access at: http://localhost:8080
+  # Login: load_user@email.com / load_pass
+  #
+  # After login, add a server connection manually:
+  #   Host: load-db   (Docker internal service name)
+  #   Port: 5432      (internal port, not 5433)
+  #   Username: load_user
+  #   Password: load_pass
+  # ---------------------------------------------------------------------------
   pgadmin:
     image: dpage/pgadmin4:latest
     container_name: load_pgadmin
@@ -76,15 +157,23 @@ services:
     ports:
       - "8080:80"
     depends_on:
-      - load-db
+      - load-db   # Start after load-db is up (does not wait for healthy)
 
+# =============================================================================
+# NAMED VOLUMES
+# =============================================================================
 volumes:
-  postgres_data:
-  mysql_data:
+  postgres_data:    # PostgreSQL source data persistence
+  mysql_data:       # MySQL source data persistence
+
+  # sqlite_data uses a bind-mount to ./sqlite/data/ on the host so the .db
+  # file is accessible to the pipeline running outside Docker without any
+  # volume copy commands.
   sqlite_data:
     driver: local
     driver_opts:
       type: none
       o: bind
       device: ./sqlite/data
-  load_db_data:
+
+  load_db_data:     # Warehouse PostgreSQL data persistence

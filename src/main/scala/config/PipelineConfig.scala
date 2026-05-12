@@ -4,64 +4,159 @@ import com.typesafe.config.{Config, ConfigFactory}
 import scala.jdk.CollectionConverters._
 import java.io.File
 
+/**
+ * PipelineConfig — central configuration model for the ETL pipeline.
+ *
+ * Reads HOCON configuration from `application.conf` (or a file path supplied
+ * at runtime) using the Typesafe Config library and maps every section to a
+ * strongly-typed Scala case class. This guarantees that configuration errors
+ * are caught at pipeline startup rather than inside a running Spark stage.
+ *
+ * Configuration is structured under the `etl` root key:
+ * {{{
+ *   etl {
+ *     spark { ... }        // SparkSession settings
+ *     extract { ... }      // Source system declarations
+ *     transform { ... }    // Cleaning, dedup, join, aggregation settings
+ *     quality { ... }      // Post-stage quality gate thresholds
+ *     warehouse { ... }    // Star-schema table definitions
+ *     load { ... }         // Output formats, warehouse target, upsert settings
+ *     orchestration { ... }// Stage list, fail-fast flag
+ *     logging { ... }      // Log level, metrics toggle
+ *     audit { ... }        // Audit log output path
+ *     quarantine { ... }   // Quarantine output base path
+ *   }
+ * }}}
+ *
+ * All `parse*` helpers use safe accessors (`getStringOrElse`, `getIntOrElse`, etc.)
+ * that return a default instead of throwing when a key is absent. This lets the
+ * pipeline start with a minimal config and rely on sensible defaults everywhere.
+ */
 object PipelineConfig {
 
+  /**
+   * Root configuration object — aggregates all pipeline sections.
+   * Constructed once at startup by [[load]] and passed to [[Main.EtlPipeline]].
+   */
   case class AppConfig(
-    spark: SparkConfig,
-    extract: ExtractConfig,
-    transform: TransformConfig,
-    quality: QualityConfig,
-    warehouse: WarehouseConfig,
-    load: LoadConfig,
+    spark:         SparkConfig,
+    extract:       ExtractConfig,
+    transform:     TransformConfig,
+    quality:       QualityConfig,
+    warehouse:     WarehouseConfig,
+    load:          LoadConfig,
     orchestration: OrchestrationConfig,
-    logging: LoggingConfig,
-    audit: AuditConfig,
-    quarantine: QuarantineConfig,
+    logging:       LoggingConfig,
+    audit:         AuditConfig,
+    quarantine:    QuarantineConfig,
   )
 
+  /**
+   * Spark session settings.
+   * @param appName          Application name shown in the Spark UI.
+   * @param master           Spark master URL. `"local[*]"` for local mode (all cores).
+   *                         Change to `"spark://host:7077"` or `"yarn"` for a cluster.
+   * @param shufflePartitions Number of partitions after a shuffle operation (joins, groupBy).
+   *                         Default 8 is suitable for local mode; increase for cluster runs.
+   */
   case class SparkConfig(
-    appName: String,
-    master: String,
+    appName:           String,
+    master:            String,
     shufflePartitions: Int
   )
 
+  /**
+   * Controls where rejected (quarantined) rows are written.
+   * @param enabled   If false, [[quality.QuarantineHandler]] writes bad rows but
+   *                  the flag is not yet propagated to suppress writing (extend if needed).
+   * @param basePath  Root directory for quarantine output. Subdirectories are created
+   *                  per run-id and stage automatically.
+   */
   case class QuarantineConfig(
-    enabled: Boolean,
+    enabled:  Boolean,
     basePath: String
   )
 
+  /**
+   * Audit log configuration.
+   * @param enabled     Reserved for future use — the [[audit.AuditLogger]] always writes
+   *                    when instantiated. Set false to suppress in future versions.
+   * @param outputPath  Directory for the audit log file (currently unused; the log path
+   *                    is set directly in [[Main.EtlPipeline]]).
+   */
   case class AuditConfig(
-    enabled: Boolean,
+    enabled:    Boolean,
     outputPath: String
   )
 
+  /**
+   * Post-stage quality gate configuration.
+   * @param enabled              If false, [[transform.QualityChecks.validate]] returns
+   *                             an empty list — all checks are skipped.
+   * @param criticalColumns      Columns that must be non-null after cleaning.
+   * @param maxNullRatioPerRow   Rows with this proportion of nulls (0.0–1.0) are flagged.
+   *                             Example: 0.7 flags rows with more than 70% null columns.
+   * @param deduplicationKeys    Business-key columns checked for remaining duplicates
+   *                             after the dedup stage.
+   */
   case class QualityConfig(
-    enabled: Boolean,
-    criticalColumns: Seq[String],
+    enabled:            Boolean,
+    criticalColumns:    Seq[String],
     maxNullRatioPerRow: Double,
-    deduplicationKeys: Seq[String]
+    deduplicationKeys:  Seq[String]
   )
 
+  /**
+   * Star-schema warehouse configuration.
+   * @param enabled     Master toggle — when false, [[load.StarSchemaBuilder]] still builds
+   *                    the DataFrames but [[load.WarehouseLoader]] skips the JDBC write.
+   * @param dimensions  Ordered list of dimension table descriptors.
+   * @param fact        Fact table descriptor.
+   */
   case class WarehouseConfig(
-    enabled: Boolean,
+    enabled:    Boolean,
     dimensions: Seq[WarehouseTableConfig],
-    fact: WarehouseTableConfig
+    fact:       WarehouseTableConfig
   )
 
+  /**
+   * Descriptor for a single warehouse table (dimension or fact).
+   * @param name          Target table name in the warehouse database, e.g. `"dim_employee"`.
+   * @param surrogateKey  Name of the surrogate key column generated by dense_rank().
+   * @param businessKeys  Natural/business keys used for upsert conflict detection.
+   */
   case class WarehouseTableConfig(
-    name: String,
+    name:         String,
     surrogateKey: String,
     businessKeys: Seq[String]
   )
 
+  /**
+   * Pipeline execution control.
+   * @param stages                        Ordered list of stage names to execute.
+   *                                      An empty list enables all stages in default order.
+   *                                      Example: `["extract", "clean", "load"]` skips dedup/join.
+   * @param failFast                      If true, any stage exception aborts the pipeline.
+   *                                      If false, failed stages return `None` and execution continues.
+   * @param skipNonCriticalSourceFailures If true, a failing API or DB source is logged as a
+   *                                      warning and skipped rather than crashing the extract stage.
+   */
   case class OrchestrationConfig(
-    stages: Seq[String],
-    failFast: Boolean,
+    stages:                       Seq[String],
+    failFast:                     Boolean,
     skipNonCriticalSourceFailures: Boolean
   )
 
+  /**
+   * Logging settings.
+   * @param level          Root log level for the SLF4J/Log4j 2 configuration.
+   *                       Spark's own log level is set separately via
+   *                       `spark.sparkContext.setLogLevel("ERROR")` in [[Main]].
+   * @param metricsEnabled If true, [[logging.PipelineLogger]] records per-stage
+   *                       wall-clock durations and emits them in `stepEndLog` messages.
+   */
   case class LoggingConfig(
-    level: String,
+    level:          String,
     metricsEnabled: Boolean
   )
 
@@ -77,33 +172,63 @@ object PipelineConfig {
     excludeNameContains: Seq[String]
   )
 
+  /**
+   * Configuration for a single REST API source.
+   * @param name       Human-readable identifier used in logs, e.g. `"jsonplaceholder-users"`.
+   * @param enabled    Toggle to include/exclude this source without removing the config block.
+   * @param url        Full endpoint URL.
+   * @param method     HTTP method: `"GET"` or `"POST"`. Defaults to `"GET"`.
+   * @param params     Query string parameters, e.g. `{ limit = "100" }`.
+   * @param headers    HTTP headers, e.g. `{ Authorization = "Bearer ..." }`.
+   * @param rootField  Top-level JSON key whose value is the records array.
+   *                   Leave empty if the response is a flat JSON array.
+   * @param sourceTag  Label written to the `__source` column for deduplication priority.
+   */
   case class ApiSourceConfig(
-    name: String,
-    enabled: Boolean,
-    url: String,
-    method: String,
-    params: Map[String, String],
-    headers: Map[String, String],
+    name:      String,
+    enabled:   Boolean,
+    url:       String,
+    method:    String,
+    params:    Map[String, String],
+    headers:   Map[String, String],
     rootField: String,
     sourceTag: String
   )
 
+  /**
+   * Configuration for a single JDBC database source.
+   * @param name             Identifier used in logs and join `right-db-ref` lookups.
+   * @param enabled          Toggle — set false when the DB container is not running.
+   * @param dbType           `"postgres"` | `"mysql"` | `"sqlite"`.
+   * @param host             Database host. Ignored for SQLite.
+   * @param port             Database port. Defaults to driver default when 0.
+   * @param database         Database/schema name. Ignored for SQLite.
+   * @param user             DB username. Ignored for SQLite.
+   * @param password         DB password. Ignored for SQLite.
+   * @param sqliteFilePath   Path to the `.db` file. Used only when `dbType = "sqlite"`.
+   * @param tableOrQuery     Plain table name or parenthesised SQL subquery with alias.
+   * @param sourceTag        Label for the `__source` deduplication column.
+   * @param partitionColumn  Optional numeric column for parallel partitioned reads.
+   * @param lowerBound       Minimum value of `partitionColumn` for range splitting.
+   * @param upperBound       Maximum value of `partitionColumn` for range splitting.
+   * @param numPartitions    Number of parallel Spark tasks for partitioned reads. Default 4.
+   */
   case class DatabaseSourceConfig(
-    name: String,
-    enabled: Boolean,
-    dbType: String,
-    host: String,
-    port: Int,
-    database: String,
-    user: String,
-    password: String,
-    sqliteFilePath: String,
-    tableOrQuery: String,
-    sourceTag: String,
+    name:            String,
+    enabled:         Boolean,
+    dbType:          String,
+    host:            String,
+    port:            Int,
+    database:        String,
+    user:            String,
+    password:        String,
+    sqliteFilePath:  String,
+    tableOrQuery:    String,
+    sourceTag:       String,
     partitionColumn: Option[String],
-    lowerBound: Option[Long],
-    upperBound: Option[Long],
-    numPartitions: Int
+    lowerBound:      Option[Long],
+    upperBound:      Option[Long],
+    numPartitions:   Int
   )
 
   case class TransformConfig(
@@ -148,19 +273,37 @@ object PipelineConfig {
     verbose: Boolean
   )
 
+  /**
+   * Configuration for a single join step in the transform chain.
+   * @param enabled          Toggle to enable/disable this join without removing the block.
+   * @param name             Descriptive name used in logs, e.g. `"employees-with-departments"`.
+   * @param rightSourceType  Type of the right-side data source: `"flat"` | `"api"` | `"db"`.
+   * @param rightPathOrQuery File path, API URL, or SQL table/query for the right side.
+   * @param rightDbRef       For `"db"` type: the `name` of a database source in `extract.databases`.
+   *                         For `"api"` type: optionally the `name` of an API source.
+   * @param joinType         Spark join type: `"inner"` | `"left"` | `"right"` | `"full"`.
+   * @param keyColumns       Join columns with identical names on both sides.
+   *                         Use `keyMappings` instead when column names differ.
+   * @param keyMappings      Explicit left→right column name pairs for asymmetric joins.
+   *                         Example: `[{ left = "department", right = "dept_id" }]`.
+   * @param selectColumns    Columns to keep in the output. Empty = keep all.
+   * @param leftPrefix       Prefix added to all non-key left-side columns before joining.
+   * @param rightPrefix      Prefix added to all non-key right-side columns before joining.
+   * @param verbose          If true, print join row counts before and after.
+   */
   case class JoinConfig(
-    enabled: Boolean,
-    name: String,
-    rightSourceType: String, // "flat" | "api" | "db"
+    enabled:          Boolean,
+    name:             String,
+    rightSourceType:  String,   // "flat" | "api" | "db"
     rightPathOrQuery: String,
-    rightDbRef: String,
-    joinType: String,
-    keyColumns: Seq[String],
-    keyMappings: Seq[(String, String)],
-    selectColumns: Seq[String],
-    leftPrefix: String,
-    rightPrefix: String,
-    verbose: Boolean
+    rightDbRef:       String,
+    joinType:         String,
+    keyColumns:       Seq[String],
+    keyMappings:      Seq[(String, String)],
+    selectColumns:    Seq[String],
+    leftPrefix:       String,
+    rightPrefix:      String,
+    verbose:          Boolean
   )
 
   case class LoadConfig(
@@ -182,12 +325,36 @@ object PipelineConfig {
     schema: String
   )
 
+  /**
+   * Upsert (INSERT ... ON CONFLICT) behaviour settings.
+   * @param enabled       Master toggle for the staging-table upsert pattern.
+   * @param stagingPrefix Prefix prepended to the target table name to form the staging
+   *                      table name. Default: `"stg_"` → `stg_dim_employee`.
+   * @param batchSize     Rows per JDBC batch insert into the staging table. Default: 500.
+   *                      Increase for large tables; decrease if the target DB has memory limits.
+   */
   case class UpsertConfig(
-    enabled: Boolean,
+    enabled:       Boolean,
     stagingPrefix: String,
-    batchSize: Int
+    batchSize:     Int
   )
 
+  /**
+   * Load and parse the full pipeline configuration.
+   *
+   * Resolution order:
+   *   1. If `configPath` points to an existing file, parse it first.
+   *   2. Fall back to the classpath `application.conf` (standard Typesafe Config behaviour).
+   *   3. Resolve variable substitutions (`${?VAR}` patterns).
+   *
+   * All section parsers use safe accessors so the pipeline starts successfully
+   * even when optional sections (quality, warehouse, orchestration) are absent
+   * from the config file — sensible defaults are applied.
+   *
+   * @param configPath  Path to the HOCON config file. Defaults to `"application.conf"`
+   *                    (resolved relative to the working directory at runtime).
+   * @return            Fully parsed [[AppConfig]] ready for use by [[Main.EtlPipeline]].
+   */
   def load(configPath: String = "application.conf"): AppConfig = {
     val rootConfig =
       if (new File(configPath).exists()) {
